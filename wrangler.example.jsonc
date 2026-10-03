@@ -23,6 +23,11 @@
 			"remote": true
 		}
 	],
+	// Optional: live category application requires a private R2 bucket.
+	// Provision separately, then uncomment and supply your bucket name.
+	// "r2_buckets": [
+	//   { "binding": "CATEGORY_AUDIT", "bucket_name": "YOUR_PRIVATE_AUDIT_BUCKET" }
+	// ],
 	"vars": {
 		// Deployment-specific values and credentials are set with
 		// `wrangler secret put`, never committed here.

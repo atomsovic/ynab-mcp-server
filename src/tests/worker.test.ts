@@ -1,6 +1,8 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
 
 import { createServer, McpApiHandler } from "../worker/mcp.js";
+import * as ynab from "ynab";
+import { contentFingerprint } from "../tools/SuggestCategoriesTool.js";
 import { tools } from "../registry.js";
 import type { WorkerEnv } from "../worker/env.js";
 
@@ -45,6 +47,7 @@ const initialize = {
 describe("worker MCP handler", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
   });
 
   it("mirrors plan environment aliases without resolving them", async () => {
@@ -118,4 +121,57 @@ describe("worker MCP handler", () => {
     expect(names).not.toContain("ynab_create_transaction");
     expect(names).not.toContain("ynab_delete_transaction");
   });
+  it("refuses direct write-tool calls in read-only mode without fetching", async () => {
+    const fetch = vi.fn(() => { throw new Error("No network in this test"); });
+    vi.stubGlobal("fetch", fetch);
+    const response = await call({ jsonrpc: "2.0", id: 10, method: "tools/call", params: {
+      name: "ynab_apply_category_suggestions", arguments: { planId: "synthetic", suggestions: [] },
+    } }, { YNAB_READ_ONLY: "true" });
+    const result = await readResult(response);
+    expect(result.error || result.result?.isError).toBeTruthy();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("wires R2 through application and retrieves the audit in a new read-only server", async () => {
+    const objects = new Map<string, string>();
+    const bucket = {
+      async put(key: string, body: string) { objects.set(key, body); return { key }; },
+      async get(key: string) { return objects.has(key) ? { text: async () => objects.get(key)! } : null; },
+    };
+    const transaction = { id: "txn-1", amount: -1000, approved: false, cleared: "uncleared", deleted: false,
+      category_id: null, subtransactions: [], account_id: "a", date: "2026-10-01" };
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "PATCH") {
+        expect(objects.size).toBe(1);
+        expect(JSON.parse([...objects.values()][0])).toMatchObject({ phase: "prepared", undo_manifest: [{ category_id: null, approved: false }] });
+        return Response.json({ data: { transactions: [{ ...transaction, category_id: "category" }] } });
+      }
+      if (url.endsWith("/categories")) return Response.json({ data: { category_groups: [
+        { id: "group", name: "Everyday", hidden: false, deleted: false, categories: [
+          { id: "category", name: "Groceries", hidden: false, deleted: false, category_group_id: "group" },
+        ] },
+      ] } });
+      if (url.endsWith("/transactions/txn-1")) return Response.json({ data: { transaction } });
+      throw new Error("Unexpected network request");
+    });
+    vi.stubGlobal("fetch", fetch);
+    const response = await call({ jsonrpc: "2.0", id: 11, method: "tools/call", params: {
+      name: "ynab_apply_category_suggestions", arguments: { planId: "synthetic", suggestions: [{
+        transaction_id: "txn-1", category_id: "category",
+        expected_content_fingerprint: await contentFingerprint(transaction as ynab.TransactionDetail),
+      }] },
+    } }, { CATEGORY_AUDIT: bucket });
+    const rpc = await readResult(response);
+    const applied = JSON.parse(rpc.result.content[0].text);
+    expect(applied).toMatchObject({ success: true, audit_status: "recorded", rows: [{ status: "applied" }] });
+    expect(objects.size).toBe(2);
+    fetch.mockClear();
+    const audit = await call({ jsonrpc: "2.0", id: 12, method: "tools/call", params: {
+      name: "ynab_get_category_audit", arguments: { operation_id: applied.operation_id },
+    } }, { CATEGORY_AUDIT: bucket, YNAB_READ_ONLY: "true" });
+    const retrieved = await readResult(audit);
+    expect(JSON.parse(retrieved.result.content[0].text)).toMatchObject({ success: true, status: "recorded", outcome: { rows: [{ status: "applied" }] } });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
 });

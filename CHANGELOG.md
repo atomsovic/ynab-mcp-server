@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- Worker typechecking no longer inherits the Node configuration’s exclusion of `src/worker`.
+- The local stdio entry point now honors `YNAB_READ_ONLY=true`, matching the Worker.
+- Category application reports missing/mismatched bulk responses and API errors as unknown outcomes rather than claiming definite failure or success.
+
+### Added
+- Durable category application audit records with pre-write category/approval state, fingerprints, validation decisions, and separate observed outcomes.
+- Synced private files for Node (`YNAB_CATEGORY_AUDIT_DIR`) and private R2 storage for Workers (`CATEGORY_AUDIT`), plus the read-only `ynab_get_category_audit` tool.
+- Regression coverage for entry-point configuration, audit failures, partial writes, excluded/stale transactions, no-ops, dry runs and persistence across store/server instances.
+
+### Changed
+- **Migration required for live category application:** configure durable audit storage before using `ynab_apply_category_suggestions` to change categories. Missing/failed preparation blocks mutation; a failed outcome save explicitly reports possible writes and retains the undo manifest. Dry runs and no-ops remain usable without storage.
+
 ## [0.4.0] - 2026-10-02
 
 ### Added

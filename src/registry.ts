@@ -1,3 +1,5 @@
+import type { ToolContext } from "./audit/categoryAudit.js";
+import * as GetCategoryAuditTool from "./tools/GetCategoryAuditTool.js";
 import * as ynab from "ynab";
 import { z } from "zod";
 
@@ -32,7 +34,7 @@ interface ToolModule {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
-  execute: (input: any, api: ynab.API) => Promise<any>;
+  execute: (input: any, api: ynab.API, context?: ToolContext) => Promise<any>;
 }
 
 export interface ToolEntry {
@@ -89,6 +91,7 @@ export const tools: ToolEntry[] = [
   { title: "Spending By Payee", module: SpendingByPayeeTool, writes: false },
   { title: "Cash Flow", module: CashFlowTool, writes: false },
   { title: "Suggest Categories", module: SuggestCategoriesTool, writes: false, requiresAiCategorization: true },
+  { title: "Get Category Audit", module: GetCategoryAuditTool, writes: false },
   { title: "Apply Category Suggestions", module: ApplyCategorySuggestionsTool, writes: true, idempotent: true },
 ];
 
@@ -101,7 +104,7 @@ export interface ToolRegistrar {
   registerTool(name: string, config: Record<string, unknown>, cb: (input: any) => Promise<any>): unknown;
 }
 
-export interface RegisterOptions {
+export interface RegisterOptions extends ToolContext {
   /** Register only the read-only tools. */
   readOnly?: boolean;
 }
@@ -168,9 +171,9 @@ function isFailureResult(result: unknown): boolean {
 }
 
 /** Runs a tool's execute, guaranteeing a failure - thrown or `{success: false}` - comes back as `isError: true`. */
-async function executeTool(module: ToolModule, input: unknown, api: ynab.API) {
+async function executeTool(module: ToolModule, input: unknown, api: ynab.API, context: ToolContext) {
   try {
-    const result = await module.execute(input, api);
+    const result = await module.execute(input, api, context);
     return isFailureResult(result) ? { ...result, isError: true } : result;
   } catch (error) {
     return toolError(getErrorMessage(error));
@@ -194,7 +197,7 @@ export function registerAll(server: ToolRegistrar, api: ynab.API, options: Regis
       description: module.description,
       inputSchema,
       annotations: buildAnnotations(tool),
-    }, async (input: any) => executeTool(module, omitNullOptionalInputs(input, module.inputSchema), api));
+    }, async (input: any) => executeTool(module, omitNullOptionalInputs(input, module.inputSchema), api, options));
   }
 
   return selected.length;

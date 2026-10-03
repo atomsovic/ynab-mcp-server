@@ -1,3 +1,5 @@
+import type { AuditBucket } from "./categoryAudit.js";
+
 /** Bindings and secrets the Worker expects. Secrets are set with `wrangler secret put`. */
 export interface WorkerEnv {
   /** YNAB Personal Access Token. Secret — never sent to the client. */
@@ -13,6 +15,8 @@ export interface WorkerEnv {
   ALLOWED_GITHUB_LOGIN: string;
   /** Set to "true" to expose only the read-only tools. */
   YNAB_READ_ONLY?: string;
+  /** Dedicated private R2 bucket for durable category application audits. */
+  CATEGORY_AUDIT?: AuditBucket;
   /** TypeSafe API credential for the optional category suggestion preview. */
   TYPESAFE_API_KEY?: string;
   /** Set to "true" as a separate opt-in for category suggestions. */

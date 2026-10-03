@@ -174,6 +174,37 @@ See [Category suggestions](./README.md#category-suggestions-optional) for the
 authoritative data-sharing contract, model and cost limits, and evaluation
 caveats.
 
+## Category application audit
+
+Live `ynab_apply_category_suggestions` changes require a dedicated private R2
+bucket bound as `CATEGORY_AUDIT`. It is intentionally absent by default: preview
+and other tools work without it, but category application fails closed before
+mutation. No Worker-local filesystem or background `waitUntil` persistence is
+used. The prepared object and outcome object are both awaited.
+
+After separately provisioning a bucket in your own Cloudflare account, add:
+
+```jsonc
+"r2_buckets": [
+  { "binding": "CATEGORY_AUDIT", "bucket_name": "YOUR_PRIVATE_AUDIT_BUCKET" }
+]
+```
+
+This repository does not create the bucket, grant credentials, configure billing,
+or deploy it for you. Keep public access disabled. Use a dedicated bucket, not
+the OAuth KV namespace. Objects are stored under `category-audit/v1/` with
+conditional create-only puts, using the
+[R2 Workers API](https://developers.cloudflare.com/r2/api/workers/workers-api-reference/).
+A successful put acknowledges durable storage; a failed conditional write is
+an error. See [audit setup and recovery](./README.md#category-application-audit)
+for record contents, lookup, retention responsibilities and recovery limits.
+
+For local Wrangler work, keep the binding local (do not set `remote: true`).
+Local emulation is useful for synthetic checks but does not prove production R2
+configuration, permissions or durability. Choose retention and backups before
+using live category writes. `YNAB_CATEGORY_AUDIT_DIR` is Node-only and is ignored
+by the Worker.
+
 ## Read-only mode
 
 To expose only the tools that read data and none that change it, set

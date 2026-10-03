@@ -49,6 +49,8 @@ Environment variables:
 | Variable | Required | Purpose |
 | --- | --- | --- |
 | `YNAB_API_TOKEN` | yes | Personal Access Token used for every API call |
+| `YNAB_READ_ONLY` | no | Set to `"true"` to omit all write tools in both local and Worker servers. |
+| `YNAB_CATEGORY_AUDIT_DIR` | for local category writes | Existing private directory on persistent storage for category audit files. See [audit setup](#category-application-audit). |
 | `YNAB_PLAN_ID` | no | Default plan, so tools can omit `planId`. Find it with `ynab_list_plans`. |
 | `TYPESAFE_API_KEY` | no | Operator-owned TypeSafe credential. Required, but not sufficient, to enable category suggestions. |
 | `YNAB_AI_CATEGORIZATION` | no | Set to `"true"` together with `TYPESAFE_API_KEY` to expose the opt-in suggestion tool. |
@@ -136,7 +138,62 @@ plain currency amounts, never YNAB's milliunits; conversion happens in
 | `ynab_list_scheduled_transactions` | Scheduled/recurring transactions. |
 | `ynab_get_transactions` | Transactions filtered by `sinceDate`, `accountId`, `categoryId`, `payeeId`, `type` (`all`/`uncategorized`/`unapproved`) and `limit` (default 100). |
 | `ynab_get_unapproved_transactions` | Unapproved transactions, optionally from `sinceDate` onward. |
+| `ynab_get_category_audit` | Retrieve persisted preparation and outcome records by operation ID; no YNAB calls. |
 | `ynab_suggest_categories` | Opt-in, read-only category previews for unapproved, uncategorized ordinary outflows. Deleted and categorized rows are dropped in default mode; approved, reconciled, balance-adjustment, transfer, split, and inflow rows are skipped as applicable. |
+
+### Category application audit
+
+For Node, create a private directory on a persistent local disk, then set an
+absolute path before starting the server, for example:
+
+```bash
+install -d -m 700 /your/persistent/path/ynab-category-audit
+export YNAB_CATEGORY_AUDIT_DIR=/your/persistent/path/ynab-category-audit
+```
+
+The directory must already exist and support file and directory `fsync`; the
+server fails closed if durability cannot be acknowledged. Files use mode `0600`.
+Do not point this at an ephemeral container disk. Windows/network filesystem
+support depends on directory sync semantics; unsupported storage blocks writes.
+For Workers, use [the R2 setup](./DEPLOY.md#category-application-audit) instead.
+
+Each validated request gets a random `operation_id`. With storage configured,
+`<operation_id>.prepared.json` is saved before mutation and a separate immutable
+`<operation_id>.outcome.json` afterwards. Version 1 records contain the plan ID,
+requested category changes, fingerprints, validation decisions, pre-write
+category and approval state, and observed outcomes (including returned category, approval and deletion state). They do not contain raw
+memos/payee descriptions, API credentials or raw API error bodies. They still
+contain sensitive financial identifiers: keep storage private and backed up.
+No automatic retention or deletion is configured.
+
+Call `ynab_get_category_audit` with the operation ID to retrieve both records,
+even in read-only mode, without a YNAB request. Operators can discover operations
+whose response was lost by listing files or the R2 `category-audit/v1/` prefix;
+there is no audit-list MCP tool. This audit covers only
+`ynab_apply_category_suggestions`, not the other general write tools.
+
+- `audit_status: recorded`: preparation and outcome were persisted, including
+  dry runs, no-ops and rejected rows. Inspect each row for its actual result.
+- `not_configured`: no durable audit exists; only a non-writing request can
+  succeed this way. `unavailable` or `prepare_failed` means no YNAB write was
+  attempted. A storage timeout may nevertheless leave a prepared record.
+- `outcome_failed`: the before-state was saved, but the final record was not
+  acknowledged. The response retains observed rows and the undo manifest and
+  reports failure; YNAB may already have changed.
+- `unknown` row: a thrown API call, omitted row, or mismatched response cannot
+  prove whether the write took effect. Confirmed matching rows are `applied`;
+  rows blocked by audit failure are `not_applied`.
+
+**Recovery is manual.** A preparation without an outcome (including a crash)
+does not prove that YNAB was changed or unchanged. Refetch each affected
+transaction before deciding to retry or restore its old category. Preserve later
+user changes and approval state; the undo manifest is evidence, not an automatic
+rollback command. Do not blindly replay an uncertain batch. Already-categorized
+retries remain no-ops. There is no transaction spanning YNAB and the audit store,
+no cross-request lock, and no YNAB conditional-write support: another actor can
+change a transaction between the fingerprint check and update. Invalid or partial
+files from an interrupted disk write require operator inspection; read errors
+are surfaced, never treated as missing records.
 
 ### Category suggestions (optional)
 
@@ -147,6 +204,11 @@ tool refetches each transaction and rejects stale or ineligible changes; a retry
 whose category is already applied is a no-op. It supports validation-only dry
 runs and returns a pre-write undo manifest, but does not perform the undo. It
 never auto-applies suggestions, calls TypeSafe, or approves transactions.
+
+Live category changes require durable audit storage: `YNAB_CATEGORY_AUDIT_DIR`
+locally or the Worker `CATEGORY_AUDIT` R2 binding. Without storage the tool still
+validates dry runs and no-ops, but refuses actual changes. See
+[Category application audit](#category-application-audit) for setup and recovery.
 
 `ynab_suggest_categories` is off by default. To expose it, set both an
 operator-owned `TYPESAFE_API_KEY` and `YNAB_AI_CATEGORIZATION=true`, then restart

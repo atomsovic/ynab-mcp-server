@@ -1,6 +1,7 @@
 import { McpServer, createMcpHandler } from "@modelcontextprotocol/server";
 import * as ynab from "ynab";
 
+import { R2CategoryAuditStore } from "./categoryAudit.js";
 import { registerAll } from "../registry.js";
 import type { WorkerEnv } from "./env.js";
 
@@ -35,6 +36,7 @@ export function createServer(env: WorkerEnv) {
   const api = new ynab.API(env.YNAB_API_TOKEN);
   registerAll(server, api, {
     readOnly: env.YNAB_READ_ONLY === "true",
+    categoryAudit: env.CATEGORY_AUDIT ? new R2CategoryAuditStore(env.CATEGORY_AUDIT) : undefined,
   });
 
   return server;
