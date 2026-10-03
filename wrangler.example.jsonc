@@ -1,6 +1,7 @@
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "ynab-mcp-server",
+	"preview_urls": false,
 	"main": "src/worker/index.ts",
 	"compatibility_date": "2026-09-01",
 	"compatibility_flags": [

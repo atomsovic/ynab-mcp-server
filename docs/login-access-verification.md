@@ -68,3 +68,28 @@ Audit preparation and YNAB writes cannot form one atomic transaction. API errors
 and partial responses can leave unknown outcomes. Preserve the before-state and
 reconcile current YNAB state before retrying or manually restoring; there is no
 automatic rollback or protection against all concurrent external edits.
+
+## Follow-on: discovery bootstrap and preview URLs
+
+Public RFC 8414 authorization-server metadata and RFC 9728 protected-resource
+metadata now need only the canonical public origin. The provider's unauthenticated
+MCP challenge includes `WWW-Authenticate` with the resource-metadata URL. Full
+security validation remains mandatory before registration, consent/callback,
+token issuance and credential-bearing MCP requests. Both deployment configs now
+set `preview_urls: false` explicitly.
+
+Seven new regression cases failed before implementation; the updated full suite
+passes **450 tests in 34 files** (`npm run test:run`). `npm run typecheck`,
+`npm run build`, `node scripts/verify-category-audit-restart.mjs`, and
+`git diff --check` also pass. No lint script exists. Independent review found no
+blockers and separately passed 49 focused OAuth tests.
+
+Worker bundling passed from `/tmp` with a cleared environment and a synthetic
+config containing the same DO/KV/R2 binding types plus `preview_urls: false`:
+
+```bash
+env -i PATH="$PATH" XDG_CONFIG_HOME=/tmp/ynab-discovery-bundle/config WRANGLER_SEND_METRICS=false node /workspace/ynab-mcp-server/node_modules/wrangler/bin/wrangler.js deploy --dry-run --config /tmp/ynab-discovery-bundle/wrangler.json --outdir /tmp/ynab-discovery-bundle/dist
+```
+
+Result: `--dry-run: exiting now`, 1803.60 KiB (gzip 293.00 KiB). These checks do
+not establish client onboarding compatibility or live OAuth/API behavior.

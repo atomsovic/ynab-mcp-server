@@ -80,9 +80,9 @@ describe("actual OAuth provider endpoints with synthetic stores", () => {
     expect((await call(f, "/mcp", request)).status).toBe(403);
     expect(fetch).toHaveBeenCalledTimes(2);
   });
-  it.each(["/register", "/authorize", "/callback", "/token", "/mcp", "/.well-known/oauth-authorization-server"])("fails closed with missing selected budget on %s", async path => {
+  it.each(["/register", "/authorize", "/callback", "/token", "/mcp"])("fails closed with missing selected budget on %s", async path => {
     const f = fixture(); delete f.env.YNAB_ALLOWED_PLAN_ID;
-    expect((await call(f, path)).status).toBe(503);
+    expect((await call(f, path, { headers: { authorization: "Bearer synthetic" } })).status).toBe(503);
     expect(f.data.size).toBe(0);
   });
   it("advertises only the configured origin and denies alternate hosts and internal flow routes", async () => {
@@ -109,4 +109,56 @@ describe("security configuration fails closed", () => {
     { OAUTH_ALLOWED_REDIRECT_URIS: '["https://[::1]/callback"]' },
     { OAUTH_ALLOWED_CLIENT_IDS: "[]" }, { GITHUB_CLIENT_SECRET: "" }, { OAUTH_FLOWS: undefined },
   ])("rejects %j", overrides => expect(() => securityConfig({ ...oauthFixture().env, ...overrides })).toThrow());
+});
+
+
+describe("public OAuth bootstrap with incomplete private configuration", () => {
+  const paths = ["/.well-known/oauth-authorization-server", "/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"];
+  it.each([undefined, "", "[]", "not-json", '["https://evil.example/*"]'])("publishes discovery but denies operations with redirect allowlist %j", async allowlist => {
+    const f = fixture(); f.env.OAUTH_ALLOWED_REDIRECT_URIS = allowlist;
+    const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);
+    for (const path of paths) {
+      const response = await call(f, path);
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      if (path.endsWith("oauth-authorization-server")) {
+        expect(body).toMatchObject({ issuer: "https://worker.example", registration_endpoint: "https://worker.example/register", response_types_supported: ["code"], code_challenge_methods_supported: ["S256"], client_id_metadata_document_supported: false });
+      } else expect(body).toEqual({ resource: "https://worker.example/mcp", authorization_servers: ["https://worker.example"], scopes_supported: ["ynab"], bearer_methods_supported: ["header"] });
+      expect(JSON.stringify(body)).not.toMatch(/synthetic|11111111|owner|evil/);
+    }
+    for (const path of ["/register", "/authorize", "/callback", "/token", "/mcp"]) {
+      const response = await call(f, path, { method: "POST", headers: { authorization: "Bearer synthetic", "content-type": "application/json" }, body: "{}" });
+      expect(response.status).toBe(503);
+    }
+    const challenge = await call(f, "/mcp", { method: "POST", body: JSON.stringify({ method: "tools/list" }) });
+    expect(challenge.status).toBe(401);
+    expect(challenge.headers.get("www-authenticate")).toContain('resource_metadata="https://worker.example/.well-known/oauth-protected-resource/mcp"');
+    expect(await challenge.text()).toBe("");
+    expect(f.data.size).toBe(0); expect(fetch).not.toHaveBeenCalled();
+  });
+  it("needs only a canonical public origin, supports HEAD/preflight, and leaks no private settings", async () => {
+    const f = fixture(); f.env = { PUBLIC_ORIGIN: "https://worker.example" } as typeof f.env;
+    for (const path of paths) expect((await call(f, path)).status).toBe(200);
+    const head = await call(f, paths[0], { method: "HEAD" });
+    expect(head.status).toBe(200); expect(await head.text()).toBe("");
+    const options = await call(f, "/mcp", { method: "OPTIONS", headers: { origin: "https://client.example" } });
+    expect(options.status).toBe(204);
+    const challenge = await call(f, "/mcp", { headers: { origin: "https://client.example" } });
+    expect(challenge.status).toBe(401);
+    expect(challenge.headers.get("access-control-expose-headers")).toContain("WWW-Authenticate");
+    expect((await call(f, paths[0], { method: "POST" })).status).toBe(405);
+  });
+  it("never trusts forwarded hosts or serves discovery on preview origins", async () => {
+    const f = fixture(); delete f.env.OAUTH_ALLOWED_REDIRECT_URIS;
+    for (const path of [...paths, "/mcp"]) {
+      const response = await worker.fetch(new Request(`https://preview.example${path}`, { headers: { "x-forwarded-host": "worker.example" } }), f.env, {} as ExecutionContext);
+      expect(response.status).toBe(400);
+    }
+    const metadata = await call(f, paths[0], { headers: { "x-forwarded-host": "evil.example" } });
+    expect((await metadata.json() as { issuer: string }).issuer).toBe("https://worker.example");
+    for (const origin of [undefined, "http://worker.example", "https://worker.example/", "https://localhost"]) {
+      f.env.PUBLIC_ORIGIN = origin;
+      expect((await call(f, paths[0])).status).toBe(503);
+    }
+  });
 });

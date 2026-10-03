@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add account-specific nonsecret deployment configuration and desktop/phone setup instructions without deploying resources.
 
 ### Fixed
+- OAuth discovery and unauthenticated MCP challenges now work before private configuration is complete; registration, sign-in, token issuance and authenticated MCP requests still fail closed. Canonical-origin checks apply to discovery too.
+- Worker deployment configs explicitly disable preview URLs instead of relying on dashboard defaults.
 - Worker typechecking no longer inherits the Node configuration’s exclusion of `src/worker`.
 - The local stdio entry point now honors `YNAB_READ_ONLY=true`, matching the Worker.
 - Category application reports missing/mismatched bulk responses and API errors as unknown outcomes rather than claiming definite failure or success.

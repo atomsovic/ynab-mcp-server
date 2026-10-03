@@ -7,19 +7,20 @@ import type { WorkerEnv } from "./env.js";
 
 export { OAuthFlowStore } from "./oauth-flow.js";
 import { authorizationCodeGate } from "./oauth-code.js";
-import { authorizedProps, securityConfig } from "./security.js";
+import { authorizedProps, publicOrigin, securityConfig } from "./security.js";
 
 export function createProvider(env: WorkerEnv) {
-  const config = securityConfig(env);
+  const origin = publicOrigin(env);
   return new OAuthProvider({
     apiRoute: "/mcp", apiHandler: McpApiHandler as any, defaultHandler: GitHubHandler as any,
     authorizeEndpoint: "/authorize", tokenEndpoint: "/token", clientRegistrationEndpoint: "/register",
     allowImplicitFlow: false, allowPlainPKCE: false, allowTokenExchangeGrant: false,
     clientIdMetadataDocumentEnabled: false,
     scopesSupported: ["ynab"],
-    resourceMetadata: { resource: `${config.origin}/mcp`, scopes_supported: ["ynab"] },
+    resourceMetadata: { resource: `${origin}/mcp`, scopes_supported: ["ynab"] },
     accessTokenTTL: 3600, refreshTokenTTL: 604800,
     async tokenExchangeCallback(options) {
+      const config = securityConfig(env);
       if (!authorizedProps(options.props, env, config)) throw new OAuthError("invalid_grant", { description: "Server policy changed; reconnect" });
       if (options.grantType === "authorization_code") {
         // Runs after provider client authentication and S256 verification, before
@@ -29,6 +30,7 @@ export function createProvider(env: WorkerEnv) {
       }
     },
     clientRegistrationCallback({ clientMetadata }) {
+      const config = securityConfig(env);
       const uris = clientMetadata.redirect_uris;
       if (!Array.isArray(uris) || !uris.length || uris.some(uri => typeof uri !== "string" || !config.redirectUris.includes(uri))) {
         return { status: 400, description: "Redirect URI is not approved by this server" };
@@ -40,10 +42,23 @@ export function createProvider(env: WorkerEnv) {
 export default {
   async fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
     try {
-      const config = securityConfig(env);
-      if (!env.OAUTH_KV) throw new Error("Missing OAuth KV");
-      if (new URL(request.url).origin !== config.origin) return new Response("Invalid origin", { status: 400 });
-      return await createProvider(env).fetch(request, { ...env, OAUTH_PROVIDER: undefined } as any, ctx);
+      const origin = publicOrigin(env);
+      const url = new URL(request.url);
+      if (url.origin !== origin) return new Response("Invalid origin", { status: 400 });
+      const discovery = ["/.well-known/oauth-authorization-server", "/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"].includes(url.pathname);
+      if (discovery && !["GET", "HEAD", "OPTIONS"].includes(request.method)) {
+        return new Response(null, { status: 405, headers: { allow: "GET, HEAD, OPTIONS" } });
+      }
+      // Only public metadata and an unauthenticated challenge/preflight bypass
+      // private configuration. The provider answers these without storage/API use.
+      const challenge = url.pathname === "/mcp" && !request.headers.has("authorization");
+      if (!discovery && !challenge) {
+        securityConfig(env);
+        if (!env.OAUTH_KV) throw new Error("Missing OAuth KV");
+      }
+      const response = await createProvider(env).fetch(request, { ...env, OAUTH_PROVIDER: undefined } as any, ctx);
+      response.headers.set("cache-control", "no-store");
+      return request.method === "HEAD" ? new Response(null, response) : response;
     } catch {
       return new Response("Server authorization configuration or storage unavailable", { status: 503, headers: { "cache-control": "no-store" } });
     }

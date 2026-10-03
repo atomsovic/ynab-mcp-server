@@ -13,10 +13,14 @@ function httpsUrl(value: string): URL {
       url.protocol !== "https:" || url.username || url.password || url.hash || value.includes("*")) throw new Error("Invalid HTTPS URL");
   return url;
 }
-export function securityConfig(env: WorkerEnv) {
-  const policy = accessPolicy(env);
+export function publicOrigin(env: Pick<WorkerEnv, "PUBLIC_ORIGIN">): string {
   const origin = env.PUBLIC_ORIGIN ?? "";
   if (httpsUrl(origin).origin !== origin) throw new Error("PUBLIC_ORIGIN must be a canonical HTTPS origin");
+  return origin;
+}
+export function securityConfig(env: WorkerEnv) {
+  const policy = accessPolicy(env);
+  const origin = publicOrigin(env);
   const redirectUris = stringList(env.OAUTH_ALLOWED_REDIRECT_URIS);
   for (const uri of redirectUris) if (httpsUrl(uri).href !== uri) throw new Error("Noncanonical redirect URI");
   const clientIds = env.OAUTH_ALLOWED_CLIENT_IDS === undefined ? undefined : stringList(env.OAUTH_ALLOWED_CLIENT_IDS);

@@ -34,7 +34,8 @@ permissions and account billing were not checked through live APIs.
 The config enables `keep_vars` for additional dashboard runtime values; values
 explicitly present in the file, such as `PUBLIC_ORIGIN` and `YNAB_TOOL_MODE`, remain
 file-owned. Secrets stay in Cloudflare. Automatic request observability is disabled
-to avoid collecting OAuth callback query strings. No calendar cron or AI processing
+to avoid collecting OAuth callback query strings. `preview_urls: false` explicitly
+disables preview URLs on redeploy, independent of dashboard defaults. No calendar cron or AI processing
 is enabled in this account config.
 
 ## Prepare on desktop now
@@ -79,8 +80,9 @@ The explicit config argument matters: `wrangler.jsonc` is gitignored and is not
 present in a GitHub checkout. Do not rely on automatic framework detection. Keep
 preview/nonproduction deployments disabled for this private service. Connecting
 Git integration can start a deployment, so do it only when you are ready; the
-first deployed version remains closed with HTTP 503 until required runtime
-configuration is complete. Cloudflare Builds may ask you to authorize its Git
+public discovery metadata and unauthenticated MCP challenges remain available;
+registration, sign-in, token issuance and credential-bearing MCP requests remain
+closed with HTTP 503 until required runtime configuration is complete. Cloudflare Builds may ask you to authorize its Git
 integration and deployment token; those are account actions you perform, not
 credentials this task created. Review its permissions before approving.
 
@@ -98,6 +100,27 @@ distinguishes build-time settings from runtime settings. Put the following under
 | `GITHUB_CLIENT_SECRET` | Secret | Your GitHub OAuth App secret |
 | `YNAB_READ_ONLY` | Text, optional | `true` for initial read-only use; `false` or absent permits audited category apply |
 | `OAUTH_ALLOWED_CLIENT_IDS` | Text, optional | JSON array of exact already-registered MCP client IDs for additional pinning |
+
+The ChatGPT allowlist means `OAUTH_ALLOWED_REDIRECT_URIS`: the exact OAuth return
+address displayed for your intended ChatGPT MCP/plugin connection, as a JSON text
+array. It is not the Worker `/callback` used by the GitHub OAuth App. Discovery
+can now run before this value is known, but registration and authorization remain
+denied until the correct URL is configured. Client support and when its setup UI
+reveals the callback still need verification; public discovery does not guarantee
+that the client can finish onboarding without its callback being configured.
+
+Public endpoints (only the canonical `PUBLIC_ORIGIN` is accepted):
+
+- `GET /.well-known/oauth-authorization-server` publishes provider capabilities.
+- `GET /.well-known/oauth-protected-resource/mcp` and the root
+  `/.well-known/oauth-protected-resource` publish resource `PUBLIC_ORIGIN/mcp`.
+- An unauthenticated `/mcp` request receives `401` with `WWW-Authenticate` pointing
+  to the resource metadata. This challenge does not list tools or access budgets.
+
+Public metadata needs only a valid `PUBLIC_ORIGIN`; it exposes no plan IDs,
+logins, allowlist contents, client IDs, storage bindings or credentials. Missing or
+malformed private configuration continues to block protected operations. Browser
+preflight is supported; preview-host and forwarded-host spoofing remain denied.
 
 The allowlist settings are **Text containing JSON**, not Cloudflare JSON-object
 bindings. Leave `YNAB_PLAN_ID`/`YNAB_BUDGET_ID` unset, or set them to exactly the
@@ -212,7 +235,14 @@ npm run deploy
 
 ## TypeSafe category preview (optional)
 
-When enabled as described above, `ynab_suggest_categories` proposes categories
+Set runtime Text `YNAB_AI_CATEGORIZATION=true` and runtime Secret
+`TYPESAFE_API_KEY` to your existing TypeSafe key. Both are required; keep the key
+out of Build variables and source. `category-only` includes
+`ynab_suggest_categories` once enabled, including when `YNAB_READ_ONLY=true`.
+Refresh the client tool list after enabling. This setting is preserved by
+`keep_vars`; secrets are retained separately.
+
+When enabled, `ynab_suggest_categories` proposes categories
 for eligible uncategorized outflows. It is a preview only and never writes to
 YNAB. Applying a proposal requires a separate explicit write; see
 [Category suggestions](./README.md#category-suggestions-optional) for the apply
