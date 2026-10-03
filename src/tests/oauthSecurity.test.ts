@@ -48,7 +48,7 @@ describe("browser-bound OAuth consent", () => {
     expect(location.searchParams.get("state")).toBe(f.flow);
     const result = await callback(f);
     expect(result.status).toBe(302);
-    expect(f.helpers.completeAuthorization).toHaveBeenCalledWith(expect.objectContaining({ userId: "123", props: expect.objectContaining({ version: 1, login: "owner", clientId: "client-1", allowedPlanId: f.env.YNAB_ALLOWED_PLAN_ID, mode: "category-only" }) }));
+    expect(f.helpers.completeAuthorization).toHaveBeenCalledWith(expect.objectContaining({ userId: "123", revokeExistingGrants: false, props: expect.objectContaining({ version: 2, userId: "123", login: "owner", clientId: "client-1", allowedPlanId: f.env.YNAB_ALLOWED_PLAN_ID, mode: "category-only" }) }));
     expect(result.headers.get("set-cookie")).toContain("Max-Age=0");
     expect(result.headers.get("referrer-policy")).toBe("no-referrer");
     expect(result.headers.get("content-security-policy")).toContain("form-action 'self';");
@@ -118,7 +118,7 @@ describe("browser-bound OAuth consent", () => {
       return { fetch: async (url: string, options?: RequestInit) => url.endsWith("/create-code") ? new Response(null, { status: 503 }) : stub.fetch(url, options) };
     } } as unknown as DurableObjectNamespace;
     vi.stubGlobal("fetch", mockGitHub());
-    expect((await callback(f)).status).toBe(400);
+    expect((await callback(f)).status).toBe(503);
     expect(f.helpers.completeAuthorization).not.toHaveBeenCalled();
   });
   it("refuses the wrong GitHub identity", async () => {
@@ -126,4 +126,10 @@ describe("browser-bound OAuth consent", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(Response.json({ access_token: "synthetic" })).mockResolvedValueOnce(Response.json({ id: 456, login: "other", name: "<script>" })));
     expect((await callback(f)).status).toBe(403); expect(f.helpers.completeAuthorization).not.toHaveBeenCalled();
   });
+});
+
+it('reports active-grant authority outage as temporary during callback',async()=>{
+ const f=await begin();await consent(f);vi.stubGlobal('fetch',mockGitHub());
+ f.env.OAUTH_GRANTS={idFromName:()=> 'synthetic',get:()=>({fetch:async()=>{throw Error('private details');}})} as unknown as DurableObjectNamespace;
+ const response=await callback(f);expect(response.status).toBe(503);expect(await response.text()).not.toContain('private details');expect(f.helpers.completeAuthorization).not.toHaveBeenCalled();
 });

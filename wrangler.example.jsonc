@@ -1,4 +1,5 @@
 {
+  "build": { "command": "npm run check:oauth-provider" },
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "ynab-mcp-server",
 	"preview_urls": false,
@@ -29,9 +30,9 @@
 	//   { "binding": "CATEGORY_AUDIT", "bucket_name": "YOUR_PRIVATE_AUDIT_BUCKET" }
 	// ],
 	"durable_objects": {
-		"bindings": [{ "name": "OAUTH_FLOWS", "class_name": "OAuthFlowStore" }]
+		"bindings": [{ "name": "OAUTH_FLOWS", "class_name": "OAuthFlowStore" }, { "name": "OAUTH_GRANTS", "class_name": "OAuthGrantStore" }]
 	},
-	"migrations": [{ "tag": "v1-oauth-flows", "new_sqlite_classes": ["OAuthFlowStore"] }],
+	"migrations": [{ "tag": "v1-oauth-flows", "new_sqlite_classes": ["OAuthFlowStore"] }, { "tag": "v2-oauth-grants", "new_sqlite_classes": ["OAuthGrantStore"] }],
 	"keep_vars": true,
 	"vars": {
 		// Deployment-specific values and credentials are set with

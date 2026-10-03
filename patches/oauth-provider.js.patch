@@ -1,0 +1,6 @@
+--- a/oauth-provider.js
++++ b/oauth-provider.js
+@@ -1883,0 +1884 @@
++			if (this.options.revokeGrantOnCodeReuse === false) return this.createErrorResponse("invalid_grant", { description: "Authorization code already used" });
+@@ -2509,0 +2511 @@
++		if (this.options.grantRevocationCallback) await this.options.grantRevocationCallback({ userId, clientId: clientInfo.clientId, grantId });

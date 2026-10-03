@@ -1,3 +1,4 @@
+import { beginGrant, GrantUnavailable } from "./oauth-grants.js";
 import { authorizationCodeGate } from "./oauth-code.js";
 import type { AuthRequest, OAuthHelpers } from "@cloudflare/workers-oauth-provider";
 import type { WorkerEnv } from "./env.js";
@@ -111,16 +112,18 @@ export const GitHubHandler = {
         if (!Number.isSafeInteger(user.id) || typeof user.login !== "string" || user.login.toLowerCase() !== env.ALLOWED_GITHUB_LOGIN.toLowerCase()) return html("<h1>Access denied</h1>", 403, clearCookie);
         const authorizationId = token();
         await authorizationCodeGate(env, authorizationId, "create");
-        const props: UserProps = { version: 1, authorizationId, login: user.login, clientId: flow.authRequest.clientId,
+        await beginGrant(env, { userId: String(user.id), clientId: flow.authRequest.clientId }, authorizationId);
+        const props: UserProps = { version: 2, userId: String(user.id), authorizationId, login: user.login, clientId: flow.authRequest.clientId,
           redirectUri: flow.authRequest.redirectUri, allowedPlanId: config.allowedPlanId, mode: config.mode, origin: config.origin };
         const { redirectTo } = await env.OAUTH_PROVIDER.completeAuthorization({ request: flow.authRequest,
-          userId: String(user.id), metadata: { label: user.login }, scope: flow.authRequest.scope, props });
+          userId: String(user.id), revokeExistingGrants: false, metadata: { label: user.login }, scope: flow.authRequest.scope, props });
         return redirect(redirectTo, clearCookie);
       }
       if (["/authorize", "/callback"].includes(url.pathname)) return html("<h1>Method not allowed</h1>", 405);
       if (url.pathname === "/" && request.method === "GET") return html("<h1>Private YNAB MCP server</h1><p>Connect through your configured MCP client to begin authorization.</p>");
       return html("<h1>Not found</h1>", 404);
-    } catch {
+    } catch (error) {
+      if (error instanceof GrantUnavailable) return html("<h1>Authorization temporarily unavailable</h1><p>Start a new connection once service is restored.</p>", 503, url.pathname === "/callback" ? clearCookie : undefined);
       return html("<h1>Authorization failed</h1><p>Invalid, expired or already used request. Start a new connection from your MCP client.</p>", 400, url.pathname === "/callback" ? clearCookie : undefined);
     }
   },

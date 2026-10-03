@@ -25,6 +25,7 @@ export function securityConfig(env: WorkerEnv) {
   for (const uri of redirectUris) if (httpsUrl(uri).href !== uri) throw new Error("Noncanonical redirect URI");
   const clientIds = env.OAUTH_ALLOWED_CLIENT_IDS === undefined ? undefined : stringList(env.OAUTH_ALLOWED_CLIENT_IDS);
   if (![env.GITHUB_CLIENT_ID, env.GITHUB_CLIENT_SECRET, env.YNAB_API_TOKEN, env.ALLOWED_GITHUB_LOGIN].every(value => typeof value === "string" && value.trim())) throw new Error("Missing security configuration");
+  if (!env.OAUTH_GRANTS) throw new Error("Missing active grant storage");
   if (!env.OAUTH_FLOWS) throw new Error("Missing OAuth flow storage");
   return { ...policy, origin, redirectUris, clientIds, mode: policy.readOnly ? "read-only" : policy.toolMode };
 }
@@ -37,7 +38,9 @@ export function validateClient(request: AuthRequest, client: ClientInfo | null, 
       (request.resource !== undefined && request.resource !== `${config.origin}/mcp`)) throw new Error("Client request not allowed");
 }
 export interface UserProps extends Record<string, unknown> {
-  version: 1;
+  version: 2;
+  userId: string;
+  grantId?: string;
   authorizationId: string;
   login: string;
   clientId: string;
@@ -48,7 +51,7 @@ export interface UserProps extends Record<string, unknown> {
 }
 export function authorizedProps(props: unknown, env: WorkerEnv, config: SecurityConfig): props is UserProps {
   const p = props as Partial<UserProps> | undefined;
-  return Boolean(p && p.version === 1 && typeof p.authorizationId === "string" && /^[0-9a-f]{64}$/.test(p.authorizationId) && typeof p.login === "string" && p.login.toLowerCase() === env.ALLOWED_GITHUB_LOGIN.toLowerCase() &&
+  return Boolean(p && p.version === 2 && typeof p.userId === "string" && /^[0-9]{1,20}$/.test(p.userId) && typeof p.authorizationId === "string" && /^[0-9a-f]{64}$/.test(p.authorizationId) && typeof p.login === "string" && p.login.toLowerCase() === env.ALLOWED_GITHUB_LOGIN.toLowerCase() &&
     p.allowedPlanId === config.allowedPlanId && p.mode === config.mode && p.origin === config.origin &&
     typeof p.clientId === "string" && p.clientId.length > 0 && typeof p.redirectUri === "string" && config.redirectUris.includes(p.redirectUri) &&
     (!config.clientIds || config.clientIds.includes(p.clientId)));

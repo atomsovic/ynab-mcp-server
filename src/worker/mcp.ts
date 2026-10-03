@@ -1,3 +1,4 @@
+import { checkGrant, GrantUnavailable } from "./oauth-grants.js";
 import { authorizedProps, securityConfig } from "./security.js";
 import { accessPolicy } from "../accessPolicy.js";
 import { McpServer, createMcpHandler } from "@modelcontextprotocol/server";
@@ -53,10 +54,28 @@ export const McpApiHandler = {
   async fetch(request: Request, env: WorkerEnv, ctx?: { props?: unknown }): Promise<Response> {
     try {
       const config = securityConfig(env);
-      if (new URL(request.url).origin !== config.origin || !authorizedProps(ctx?.props, env, config)) {
+      const props = ctx?.props;
+      if ((props as { version?: unknown } | undefined)?.version !== 2) return inactive(config.origin);
+      if (new URL(request.url).origin !== config.origin || !authorizedProps(props, env, config)) {
         return new Response("Authorization no longer matches server policy; reconnect", { status: 403, headers: { "cache-control": "no-store" } });
       }
+      if (!props.grantId) return inactive(config.origin);
+      try { await checkGrant(env, { ...props, grantId: props.grantId }); }
+      catch (error) {
+        return error instanceof GrantUnavailable ? new Response("Authorization storage temporarily unavailable", { status: 503, headers: { "cache-control": "no-store" } }) : inactive(config.origin);
+      }
     } catch { return new Response("Server configuration unavailable", { status: 503 }); }
+    if (new URL(request.url).pathname === "/mcp/diagnostics") {
+      if (request.method !== "GET") return new Response(null, { status: 405, headers: { allow: "GET", "cache-control": "no-store" } });
+      applyEnv(env);
+      const policy = accessPolicy(env), names: string[] = [];
+      registerAll({ registerTool(name) { names.push(name); } }, {} as ynab.API, policy);
+      return Response.json({
+        authorizationVersion: 2, toolMode: policy.toolMode, readOnly: policy.readOnly,
+        aiOptInEnabled: env.YNAB_AI_CATEGORIZATION === "true", aiKeyConfigured: Boolean(env.TYPESAFE_API_KEY),
+        suggestionsRegistered: names.includes("ynab_suggest_categories"), registeredToolCount: names.length,
+      }, { headers: { "cache-control": "no-store" } });
+    }
     const handler = createMcpHandler(() => createServer(env));
     try {
       return await handler.fetch(request);
@@ -65,3 +84,7 @@ export const McpApiHandler = {
     }
   },
 };
+
+function inactive(origin: string) {
+  return new Response("Authorization inactive; reconnect", { status: 401, headers: { "cache-control": "no-store", "www-authenticate": `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource/mcp", error="invalid_token"` } });
+}

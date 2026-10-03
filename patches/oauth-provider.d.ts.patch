@@ -1,0 +1,7 @@
+--- a/oauth-provider.d.ts
++++ b/oauth-provider.d.ts
+@@ -637,0 +638,4 @@
++  /** Local extension: false only when the application enforces atomic code consumption. */
++  revokeGrantOnCodeReuse?: boolean;
++  /** Local extension: validated refresh-token ownership; called before grant deletion. */
++  grantRevocationCallback?: (options: { userId: string; clientId: string; grantId: string }) => Promise<void>;

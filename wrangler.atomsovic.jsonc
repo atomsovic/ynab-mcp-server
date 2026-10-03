@@ -1,4 +1,5 @@
 {
+  "build": { "command": "npm run check:oauth-provider" },
   "$schema": "node_modules/wrangler/config-schema.json",
   // Nonsecret account resource identifiers supplied by the operator.
   // This file prepares a deployment; committing it does not deploy anything.
@@ -17,9 +18,9 @@
     { "binding": "CATEGORY_AUDIT", "bucket_name": "ynab-category-audit" }
   ],
   "durable_objects": {
-    "bindings": [{ "name": "OAUTH_FLOWS", "class_name": "OAuthFlowStore" }]
+    "bindings": [{ "name": "OAUTH_FLOWS", "class_name": "OAuthFlowStore" }, { "name": "OAUTH_GRANTS", "class_name": "OAuthGrantStore" }]
   },
-  "migrations": [{ "tag": "v1-oauth-flows", "new_sqlite_classes": ["OAuthFlowStore"] }],
+  "migrations": [{ "tag": "v1-oauth-flows", "new_sqlite_classes": ["OAuthFlowStore"] }, { "tag": "v2-oauth-grants", "new_sqlite_classes": ["OAuthGrantStore"] }],
   // Preserve additional dashboard runtime variables on later Wrangler deploys.
   "keep_vars": true,
   "vars": {

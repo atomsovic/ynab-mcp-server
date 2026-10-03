@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Security
+- Defer replacement authorization until durable token issuance and atomic active-grant activation. Enforce one active grant per user/client on MCP and refresh, with durable revocation fences and explicit version-1 reconnect migration.
+- Pin and checksum-guard the local OAuth provider extension for non-destructive code replay rejection and validated refresh-grant revocation; preserve existing token lifetimes and access controls.
 - Require an explicit selected plan UUID in both entry points; reject conflicting aliases, restrict plan enumeration and audit lookup, and default to reviewed reads plus audited category apply. General writes require explicit `full` mode.
 - Replace unsigned browser-carried OAuth requests with opaque, browser-bound, expiring Durable Object state and explicit CSRF-protected client consent. Restrict registration/authorization to configured exact HTTPS callback URLs, require S256 PKCE and enforce the canonical resource origin.
 - Add atomic authorization-code redemption after provider client/PKCE validation, and reject legacy or changed-policy grants. Preserve provider token validation; direct use of a stolen YNAB PAT is outside this boundary.
@@ -23,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Category application reports missing/mismatched bulk responses and API errors as unknown outcomes rather than claiming definite failure or success.
 
 ### Added
+- Authenticated, no-store `/mcp/diagnostics` reports effective tool gates and counts without identities, credentials or financial data.
+- Replacement failure/race, provider patch installation, and real workerd restart/migration regressions.
 - Durable category application audit records with pre-write category/approval state, fingerprints, validation decisions, and separate observed outcomes.
 - Synced private files for Node (`YNAB_CATEGORY_AUDIT_DIR`) and private R2 storage for Workers (`CATEGORY_AUDIT`), plus the read-only `ynab_get_category_audit` tool.
 - Regression coverage for entry-point configuration, audit failures, partial writes, excluded/stale transactions, no-ops, dry runs and persistence across store/server instances.

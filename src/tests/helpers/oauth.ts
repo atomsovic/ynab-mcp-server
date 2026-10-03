@@ -1,3 +1,5 @@
+import { OAuthGrantStore } from "../../worker/oauth-grants.js";
+import { memoryNamespace } from "./durable.js";
 import { vi } from "vitest";
 import { OAuthFlowStore } from "../../worker/oauth-flow.js";
 import type { AuthRequest, OAuthHelpers } from "@cloudflare/workers-oauth-provider";
@@ -45,7 +47,7 @@ export function oauthFixture() {
     YNAB_API_TOKEN: "synthetic-pat", YNAB_ALLOWED_PLAN_ID: selectedPlan,
     GITHUB_CLIENT_ID: "synthetic-app", GITHUB_CLIENT_SECRET: "synthetic-secret", ALLOWED_GITHUB_LOGIN: "owner",
     PUBLIC_ORIGIN: "https://worker.example", OAUTH_ALLOWED_REDIRECT_URIS: JSON.stringify([authRequest.redirectUri]),
-    OAUTH_FLOWS: memoryFlows(), OAUTH_PROVIDER: helpers,
+    OAUTH_FLOWS: memoryFlows(), OAUTH_GRANTS: memoryNamespace(OAuthGrantStore), OAUTH_PROVIDER: helpers,
   } as unknown as WorkerEnv & { OAUTH_PROVIDER: OAuthHelpers };
   return { env, helpers };
 }

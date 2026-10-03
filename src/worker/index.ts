@@ -7,9 +7,12 @@ import type { WorkerEnv } from "./env.js";
 
 export { OAuthFlowStore } from "./oauth-flow.js";
 import { authorizationCodeGate } from "./oauth-code.js";
+import { activateGrant, checkGrant, revokeGrant, GrantUnavailable, GrantInactive, ACCESS_TTL_SECONDS, REFRESH_TTL_SECONDS, type GrantIdentity } from "./oauth-grants.js";
+export { OAuthGrantStore } from "./oauth-grants.js";
 import { authorizedProps, publicOrigin, securityConfig } from "./security.js";
 
-export function createProvider(env: WorkerEnv) {
+interface ExchangeContext { value?: { grantType: string; identity: GrantIdentity; expiresAt: number } }
+export function createProvider(env: WorkerEnv, exchange: ExchangeContext = {}) {
   const origin = publicOrigin(env);
   return new OAuthProvider({
     apiRoute: "/mcp", apiHandler: McpApiHandler as any, defaultHandler: GitHubHandler as any,
@@ -18,16 +21,26 @@ export function createProvider(env: WorkerEnv) {
     clientIdMetadataDocumentEnabled: false,
     scopesSupported: ["ynab"],
     resourceMetadata: { resource: `${origin}/mcp`, scopes_supported: ["ynab"] },
-    accessTokenTTL: 3600, refreshTokenTTL: 604800,
+    accessTokenTTL: ACCESS_TTL_SECONDS, refreshTokenTTL: REFRESH_TTL_SECONDS,
+    // Local pinned extension: the DO gate handles code reuse without revoking its winner.
+    revokeGrantOnCodeReuse: false,
+    grantRevocationCallback: options => revokeGrant(env, options),
     async tokenExchangeCallback(options) {
       const config = securityConfig(env);
-      if (!authorizedProps(options.props, env, config)) throw new OAuthError("invalid_grant", { description: "Server policy changed; reconnect" });
+      if (!authorizedProps(options.props, env, config) || options.props.userId !== options.userId || options.props.clientId !== options.clientId) throw new OAuthError("invalid_grant", { description: "Server policy changed; reconnect" });
+      const identity = { userId: options.userId, clientId: options.clientId, authorizationId: options.props.authorizationId, grantId: options.grantId };
+      if (options.grantType === "refresh_token") {
+        try { await checkGrant(env, identity); }
+        catch (error) { throw new OAuthError(error instanceof GrantUnavailable ? "temporarily_unavailable" : "invalid_grant", { description: error instanceof GrantUnavailable ? "Authorization storage temporarily unavailable" : "Authorization inactive; reconnect", statusCode: error instanceof GrantUnavailable ? 503 : 400 }); }
+      }
       if (options.grantType === "authorization_code") {
         // Runs after provider client authentication and S256 verification, before
         // token issuance. KV alone cannot guarantee atomic code redemption.
         try { await authorizationCodeGate(env, options.props.authorizationId, "consume"); }
-        catch { throw new OAuthError("invalid_grant", { description: "Authorization code expired or already redeemed; reconnect" }); }
+        catch (error) { throw new OAuthError(error instanceof GrantUnavailable ? "temporarily_unavailable" : "invalid_grant", { description: error instanceof GrantUnavailable ? "Authorization storage temporarily unavailable" : "Authorization code expired or already redeemed; reconnect", statusCode: error instanceof GrantUnavailable ? 503 : 400 }); }
       }
+      exchange.value = { grantType: options.grantType, identity, expiresAt: Date.now() + REFRESH_TTL_SECONDS * 1000 };
+      if (options.grantType === "authorization_code") return { newProps: { ...options.props, grantId: options.grantId } };
     },
     clientRegistrationCallback({ clientMetadata }) {
       const config = securityConfig(env);
@@ -56,10 +69,23 @@ export default {
         securityConfig(env);
         if (!env.OAUTH_KV) throw new Error("Missing OAuth KV");
       }
-      const response = await createProvider(env).fetch(request, { ...env, OAUTH_PROVIDER: undefined } as any, ctx);
+      // This closure belongs to one provider request; nothing is inferred from opaque tokens.
+      const exchange: ExchangeContext = {};
+      const response = await createProvider(env, exchange).fetch(request, { ...env, OAUTH_PROVIDER: undefined } as any, ctx);
+      if (response.status === 200 && exchange.value) {
+        const { grantType, identity, expiresAt } = exchange.value;
+        try {
+          if (grantType === "authorization_code") await activateGrant(env, identity, expiresAt);
+          else await checkGrant(env, identity); // Fence a refresh that raced replacement/revocation.
+        } catch (error) {
+          // Never return persisted-but-inactive credentials, or roll back an ambiguous commit.
+          return Response.json({ error: error instanceof GrantInactive ? "invalid_grant" : "temporarily_unavailable", error_description: error instanceof GrantInactive ? "Authorization inactive; reconnect" : "Authorization storage temporarily unavailable" }, { status: error instanceof GrantInactive ? 400 : 503, headers: { "cache-control": "no-store" } });
+        }
+      }
       response.headers.set("cache-control", "no-store");
       return request.method === "HEAD" ? new Response(null, response) : response;
     } catch {
+      if (new URL(request.url).pathname === "/token") return Response.json({ error: "temporarily_unavailable", error_description: "Authorization service temporarily unavailable" }, { status: 503, headers: { "cache-control": "no-store" } });
       return new Response("Server authorization configuration or storage unavailable", { status: 503, headers: { "cache-control": "no-store" } });
     }
   },

@@ -313,3 +313,59 @@ paths and the OAuth metadata endpoints.
 | `src/worker/index.ts` | Worker entry: OAuth in front of the MCP handler |
 | `src/worker/mcp.ts` | Builds the MCP server and serves `/mcp` |
 | `src/worker/github-handler.ts` | GitHub sign-in and the single-user gate |
+
+## Active-grant migration (local change; deployment requires approval)
+
+This change adds `OAUTH_GRANTS`, class `OAuthGrantStore`, with SQLite migration
+`v2-oauth-grants`, alongside the existing `OAUTH_FLOWS`. Both example and
+account-specific configs include it. Keep the original `v1-oauth-flows` migration;
+do not delete or recreate existing namespaces. The new authority is required for
+authenticated operation and adds a Durable Object request per MCP request plus
+storage/requests during login and renewal. Its generation/tombstones persist;
+the ten-minute cleanup alarm deletes only pending candidates.
+
+Before any separately approved deployment:
+
+1. Review the local provider extension in `patches/README.md`. `npm ci` applies it;
+   `npm run check:oauth-provider` verifies its pinned source and hashes. Both
+   Wrangler configurations run the check in their custom build command. Keep that
+   command if using another config; do not bypass it with build overrides.
+2. Run the full test, typecheck, build and Worker dry-run checks. Review the new
+   migration and ensure the Worker version exports both Durable Object classes.
+3. Schedule **one reconnect for all existing version-1 connections**. They are
+   intentionally rejected; a missing authority record never adopts an old grant.
+4. Deploy only after approval, with the new binding/migration and existing private
+   settings preserved. Connect once, select that connection, and verify reads and
+   tool discovery. No live deployment or credentials were used during these tests.
+
+Subsequent replacement consent keeps the existing connection until new tokens
+are persisted and the authority atomically activates the replacement. Abandoned
+or failed pre-activation attempts preserve the old connection. Same-user/client
+parallel connections are not enabled. Token lifetimes remain one hour / seven
+days (refresh lifetime is absolute, not sliding). Separate client IDs remain
+independent, as before.
+
+An activation can commit and its response be lost: a new connection may still be
+needed then. Requests that already passed authorization cannot be retroactively
+cancelled. Authority outages fail closed with temporary errors; do not delete its
+storage or change bindings to recover them. Replaced provider records can remain
+in KV until their existing TTL expires, but are not authorized.
+
+**Rollback caution:** returning to pre-migration code removes authority enforcement
+and may accept still-unexpired legacy/replaced provider records. Do not blindly
+roll back to the old build or an unpatched provider. Use a forward fix, or a
+separately reviewed revocation/migration procedure with planned reconnects.
+
+### Diagnose discovery without reading financial data
+
+An already-authorized client can request `GET /mcp/diagnostics` with its existing
+Bearer token kept private. The response contains only authorization version,
+effective mode/read-only, AI opt-in/key-present booleans, suggestion-registration
+boolean and tool count. It is `no-store`, accepts GET only, and requires the same
+valid active grant and policy as MCP. It returns no credentials, identities, plan
+IDs or financial data. Do not paste tokens, cookies or a full browser HAR into chat.
+
+This endpoint distinguishes effective Worker registration from client metadata;
+it does not fix or reveal ChatGPT's internal **Refresh tools** failure. Keep that
+issue separate and inspect its sanitized status/error using the newly valid
+connection.

@@ -38,10 +38,12 @@
     "ynab-mcp-server": "./dist/index.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "scripts/patch-oauth-provider.mjs",
+    "patches"
   ],
   "scripts": {
-    "build": "tsc && chmod +x dist/index.js",
+    "build": "npm run check:oauth-provider && tsc && chmod +x dist/index.js",
     "prepare": "npm run build",
     "watch": "tsc --watch",
     "start": "node dist/index.js",
@@ -49,14 +51,16 @@
     "test": "vitest",
     "test:watch": "vitest watch",
     "test:coverage": "vitest run --coverage",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.worker.json",
-    "dev:worker": "wrangler dev",
-    "deploy": "wrangler deploy",
-    "test:run": "vitest run",
-    "test:browser": "YNAB_BROWSER_TESTS=true vitest run src/tests/oauthConsent.browser.test.ts"
+    "typecheck": "npm run check:oauth-provider && tsc --noEmit && tsc -p tsconfig.worker.json",
+    "dev:worker": "npm run check:oauth-provider && wrangler dev",
+    "deploy": "npm run check:oauth-provider && wrangler deploy",
+    "test:run": "npm run check:oauth-provider && vitest run",
+    "test:browser": "npm run check:oauth-provider && YNAB_BROWSER_TESTS=true vitest run src/tests/oauthConsent.browser.test.ts",
+    "postinstall": "node scripts/patch-oauth-provider.mjs",
+    "check:oauth-provider": "node scripts/patch-oauth-provider.mjs --check"
   },
   "dependencies": {
-    "@cloudflare/workers-oauth-provider": "^0.10.3",
+    "@cloudflare/workers-oauth-provider": "0.10.3",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@modelcontextprotocol/server": "^2.0.0",
     "ynab": "^4.5.0",

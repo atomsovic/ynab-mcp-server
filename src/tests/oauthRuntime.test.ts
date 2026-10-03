@@ -20,7 +20,7 @@ function fixture(failure?: { stage: "token" | "profile"; status: number }) {
       YNAB_API_TOKEN: "synthetic", GITHUB_CLIENT_ID: "synthetic", GITHUB_CLIENT_SECRET: "synthetic",
       ALLOWED_GITHUB_LOGIN: "owner", OAUTH_ALLOWED_REDIRECT_URIS: '["https://client.example/callback"]',
     },
-    kvNamespaces: ["OAUTH_KV"], durableObjects: { OAUTH_FLOWS: { className: "OAuthFlowStore", useSQLite: true } },
+    kvNamespaces: ["OAUTH_KV"], durableObjects: { OAUTH_GRANTS: { className: "OAuthGrantStore", useSQLite: true }, OAUTH_FLOWS: { className: "OAuthFlowStore", useSQLite: true } },
     outboundService(request) {
       outbound.push(request.url);
       const stage = request.url === "https://github.com/login/oauth/access_token" ? "token" : request.url === "https://api.github.com/user" ? "profile" : undefined;

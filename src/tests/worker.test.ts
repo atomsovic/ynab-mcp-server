@@ -1,3 +1,5 @@
+import { memoryNamespace } from "./helpers/durable.js";
+import { OAuthGrantStore, beginGrant, activateGrant } from "../worker/oauth-grants.js";
 import { selectedPlan, memoryFlows } from "./helpers/oauth.js";
 import { afterEach, describe, it, expect, vi } from "vitest";
 
@@ -28,8 +30,11 @@ async function call(body: unknown, overrides: Partial<WorkerEnv> = {}) {
     },
     body: JSON.stringify(body),
   });
-  const configured = { ...env, ...overrides };
-  return McpApiHandler.fetch(request, configured, { props: { version: 1, authorizationId: "a".repeat(64), login: "someone", clientId: "client-1", redirectUri: "https://client.example/callback", origin: "https://example.com", allowedPlanId: selectedPlan,
+  const configured = { ...env, OAUTH_GRANTS: memoryNamespace(OAuthGrantStore) as unknown as DurableObjectNamespace, ...overrides };
+  const identity = { userId: "123", clientId: "client-1", authorizationId: "a".repeat(64), grantId: "synthetic-grant" };
+  await beginGrant(configured, identity, identity.authorizationId);
+  await activateGrant(configured, identity, Date.now() + 604800000);
+  return McpApiHandler.fetch(request, configured, { props: { version: 2, userId: "123", grantId: "synthetic-grant", authorizationId: "a".repeat(64), login: "someone", clientId: "client-1", redirectUri: "https://client.example/callback", origin: "https://example.com", allowedPlanId: selectedPlan,
     mode: configured.YNAB_READ_ONLY === "true" || configured.YNAB_TOOL_MODE === "read-only" ? "read-only" : configured.YNAB_TOOL_MODE ?? "category-only" } });
 }
 

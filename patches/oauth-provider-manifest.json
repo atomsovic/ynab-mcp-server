@@ -1,0 +1,31 @@
+{
+  "version": "0.10.3",
+  "files": [
+    {
+      "file": "oauth-provider.js",
+      "before": "ec5e19e794e665f9c8c5234554f8d46db6d269424e78f44ace9f6f48fbe96fca",
+      "after": "c99e8e33f471d3b965988e8941a352068d8b60921b6f74d5797136bd66939dd8",
+      "replacements": [
+        {
+          "before": "\t\tif (!grantData.authCodeWrappedKey) {\n\t\t\ttry {\n",
+          "after": "\t\tif (!grantData.authCodeWrappedKey) {\n\t\t\tif (this.options.revokeGrantOnCodeReuse === false) return this.createErrorResponse(\"invalid_grant\", { description: \"Authorization code already used\" });\n\t\t\ttry {\n"
+        },
+        {
+          "before": "\t\tif (grantData.clientId !== clientInfo.clientId) return false;\n\t\tawait this.createOAuthHelpers(env).revokeGrant(grantId, userId);\n",
+          "after": "\t\tif (grantData.clientId !== clientInfo.clientId) return false;\n\t\tif (this.options.grantRevocationCallback) await this.options.grantRevocationCallback({ userId, clientId: clientInfo.clientId, grantId });\n\t\tawait this.createOAuthHelpers(env).revokeGrant(grantId, userId);\n"
+        }
+      ]
+    },
+    {
+      "file": "oauth-provider.d.ts",
+      "before": "d9bd3be953a6a23441d7d61a88e249cf248609c95a56e640467f944f63c846c7",
+      "after": "5605c865e63a96260b7445ecdc7b027a751924f19930f591e3923fc590c666b0",
+      "replacements": [
+        {
+          "before": "   */\n  tokenExchangeCallback?: (options: TokenExchangeCallbackOptions) => Promise<TokenExchangeCallbackResult | void> | TokenExchangeCallbackResult | void;\n",
+          "after": "   */\n  /** Local extension: false only when the application enforces atomic code consumption. */\n  revokeGrantOnCodeReuse?: boolean;\n  /** Local extension: validated refresh-token ownership; called before grant deletion. */\n  grantRevocationCallback?: (options: { userId: string; clientId: string; grantId: string }) => Promise<void>;\n  tokenExchangeCallback?: (options: TokenExchangeCallbackOptions) => Promise<TokenExchangeCallbackResult | void> | TokenExchangeCallbackResult | void;\n"
+        }
+      ]
+    }
+  ]
+}
