@@ -131,3 +131,39 @@ ports. Normal `npm run test:run` skips the browser suite unless
 `YNAB_BROWSER_TESTS=true`, keeping Worker build environments without a browser
 usable. The GitHub PR workflow explicitly runs the browser suite on Node 24 using
 the runner's Chrome/Chromium. iOS/WebKit and a live OAuth round trip are untested.
+
+## Follow-on: Cloudflare callback runtime regression
+
+Both GitHub fetches used `redirect: "error"`, which Node accepts but workerd
+rejects before sending the request. This consumed the browser-bound flow and
+returned the generic callback failure. Both fetches now use `manual`; a non-2xx
+response is rejected before parsing JSON, so upstream redirects are never
+followed and upstream error bodies are not exposed. All existing authorization
+checks remain in place. A failed, consumed flow still requires a new connection.
+
+`src/tests/oauthRuntime.test.ts` bundles the actual Worker for the browser/edge
+target and runs it in Miniflare/workerd with local KV and SQLite Durable Objects.
+All bindings and responses are synthetic; every outbound request is intercepted.
+The success case exercises registration, consent, GitHub callback, S256 code
+exchange, authenticated MCP and callback/code replay rejection. Failure cases
+cover 301, 302, 307, 308 and non-JSON 500 responses from each GitHub endpoint,
+including no redirect following, cookie clearing and consumed-state rejection.
+The installed esbuild and Miniflare versions are explicitly pinned as development
+dependencies for these tests. No production dependency changed.
+
+Verification:
+
+- `npm run test:run -- src/tests/oauthRuntime.test.ts`: all three cases failed
+  before the fix (callback returned 400), then all three passed after it.
+- `YNAB_BROWSER_TESTS=true npm run test:run`: **458 tests in 36 files passed**,
+  including the five native Chromium consent cases and three workerd cases.
+- `npm run typecheck`, `npm run build`,
+  `node scripts/verify-category-audit-restart.mjs`, `git diff --check`: passed.
+- Isolated Worker bundling passed using the dry-run command above.
+
+Independent review found no blocking issues and separately passed 52 runtime,
+security and endpoint tests.
+
+No live GitHub sign-in, YNAB or TypeSafe call was performed. iOS/WebKit and the
+user's complete production OAuth connection remain untested. There is no lint
+script/configuration in this checkout.

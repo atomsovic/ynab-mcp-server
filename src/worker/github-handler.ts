@@ -95,13 +95,15 @@ export const GitHubHandler = {
         const flow = await flowCall(env, state, "consume", { browserHash: await hash(browserToken(request)) });
         if (flow.allowedPlanId !== config.allowedPlanId || flow.mode !== config.mode || flow.origin !== config.origin) throw new Error("Policy changed");
         validateClient(flow.authRequest, await env.OAUTH_PROVIDER.lookupClient(flow.authRequest.clientId), config);
+        // workerd supports manual, not error; reject redirects before reading bodies.
         const tokenResponse = await fetch("https://github.com/login/oauth/access_token", {
-          method: "POST", redirect: "error", headers: { accept: "application/json", "content-type": "application/json" },
+          method: "POST", redirect: "manual", headers: { accept: "application/json", "content-type": "application/json" },
           body: JSON.stringify({ client_id: env.GITHUB_CLIENT_ID, client_secret: env.GITHUB_CLIENT_SECRET, code, redirect_uri: `${config.origin}/callback` }),
         });
+        if (!tokenResponse.ok) return html("<h1>GitHub sign-in failed</h1>", 401, clearCookie);
         const tokenBody = await tokenResponse.json() as { access_token?: string };
-        if (!tokenResponse.ok || typeof tokenBody.access_token !== "string" || !tokenBody.access_token) return html("<h1>GitHub sign-in failed</h1>", 401, clearCookie);
-        const userResponse = await fetch("https://api.github.com/user", { redirect: "error", headers: {
+        if (typeof tokenBody.access_token !== "string" || !tokenBody.access_token) return html("<h1>GitHub sign-in failed</h1>", 401, clearCookie);
+        const userResponse = await fetch("https://api.github.com/user", { redirect: "manual", headers: {
           accept: "application/vnd.github+json", authorization: `Bearer ${tokenBody.access_token}`, "user-agent": "ynab-mcp-server",
         } });
         if (!userResponse.ok) return html("<h1>GitHub sign-in failed</h1>", 401, clearCookie);
