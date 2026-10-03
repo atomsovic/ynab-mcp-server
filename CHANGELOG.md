@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- Require an explicit selected plan UUID in both entry points; reject conflicting aliases, restrict plan enumeration and audit lookup, and default to reviewed reads plus audited category apply. General writes require explicit `full` mode.
+- Replace unsigned browser-carried OAuth requests with opaque, browser-bound, expiring Durable Object state and explicit CSRF-protected client consent. Restrict registration/authorization to configured exact HTTPS callback URLs, require S256 PKCE and enforce the canonical resource origin.
+- Add atomic authorization-code redemption after provider client/PKCE validation, and reject legacy or changed-policy grants. Preserve provider token validation; direct use of a stolen YNAB PAT is outside this boundary.
+- Add account-specific nonsecret deployment configuration and desktop/phone setup instructions without deploying resources.
+
 ### Fixed
 - Worker typechecking no longer inherits the Node configuration’s exclusion of `src/worker`.
 - The local stdio entry point now honors `YNAB_READ_ONLY=true`, matching the Worker.

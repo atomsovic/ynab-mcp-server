@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FileCategoryAuditStore } from "../audit/fileCategoryAudit.js";
 
+const selectedPlan = "11111111-1111-4111-8111-111111111111";
 const { names, callbacks } = vi.hoisted(() => ({ names: [] as string[], callbacks: new Map<string, (input: unknown) => Promise<any>>() }));
 vi.mock("@modelcontextprotocol/sdk/server/mcp.js", () => ({
   McpServer: class {
@@ -24,6 +25,8 @@ describe("stdio entry point", () => {
     callbacks.clear();
     vi.stubEnv("YNAB_CATEGORY_AUDIT_DIR", undefined);
     vi.stubEnv("YNAB_API_TOKEN", "synthetic-token");
+    vi.stubEnv("YNAB_ALLOWED_PLAN_ID", selectedPlan);
+    vi.stubEnv("YNAB_TOOL_MODE", "full");
     vi.stubEnv("YNAB_READ_ONLY", value);
     vi.spyOn(console, "error").mockImplementation(() => {});
     await import("../index.js");
@@ -39,16 +42,18 @@ describe("stdio entry point", () => {
       const operationId = "00000000-0000-4000-8000-000000000001";
       await new FileCategoryAuditStore(directory).write({
         version: 1, operation_id: operationId, phase: "prepared", recorded_at: "2026-10-03T00:00:00Z",
-        plan_id: "synthetic", dry_run: false, undo_manifest: [], rows: [],
+        plan_id: selectedPlan, dry_run: false, undo_manifest: [], rows: [],
       });
       vi.resetModules();
       vi.stubEnv("YNAB_API_TOKEN", "synthetic-token");
+    vi.stubEnv("YNAB_ALLOWED_PLAN_ID", selectedPlan);
+    vi.stubEnv("YNAB_TOOL_MODE", "full");
       vi.stubEnv("YNAB_READ_ONLY", "true");
       vi.stubEnv("YNAB_CATEGORY_AUDIT_DIR", directory);
       vi.spyOn(console, "error").mockImplementation(() => {});
       await import("../index.js");
       const result = await callbacks.get("ynab_get_category_audit")!({ operation_id: operationId });
-      expect(JSON.parse(result.content[0].text)).toMatchObject({ success: true, status: "needs_reconciliation", prepared: { plan_id: "synthetic" } });
+      expect(JSON.parse(result.content[0].text)).toMatchObject({ success: true, status: "needs_reconciliation", prepared: { plan_id: selectedPlan } });
     } finally { await rm(directory, { recursive: true, force: true }); }
   });
 

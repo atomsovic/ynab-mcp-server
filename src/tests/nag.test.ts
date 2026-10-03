@@ -265,3 +265,24 @@ describe("pickHour", () => {
     expect(pickHour("2026-11-30", 14, 14)).toBe(14);
   });
 });
+
+
+describe("scheduled plan restriction", () => {
+  it("uses only the selected plan and refuses conflicting aliases before fetching", async () => {
+    const planId = "11111111-1111-4111-8111-111111111111";
+    const env = { YNAB_API_TOKEN: "synthetic", YNAB_ALLOWED_PLAN_ID: planId,
+      GOOGLE_SERVICE_ACCOUNT_JSON: "synthetic-unused", NAG_CALENDAR_ID: "synthetic",
+      NAG_TIMEZONE: "UTC", NAG_HOUR_MIN: "0", NAG_HOUR_MAX: "0" } as WorkerEnv;
+    const fetch = vi.fn().mockImplementation(async () => Response.json({ data: { transactions: [] } }));
+    vi.stubGlobal("fetch", fetch);
+    try {
+      expect(await runNag(env, new Date("2026-10-03T00:00:00Z"))).toMatchObject({ ran: true, result: "nothing-to-do" });
+      expect(fetch).toHaveBeenCalledTimes(2);
+      for (const [url] of fetch.mock.calls) expect(String(url)).toContain(`/plans/${planId}/transactions`);
+      fetch.mockClear();
+      env.YNAB_PLAN_ID = "22222222-2222-4222-8222-222222222222";
+      expect(await runNag(env, new Date("2026-10-03T00:00:00Z"))).toMatchObject({ ran: false });
+      expect(fetch).not.toHaveBeenCalled();
+    } finally { vi.unstubAllGlobals(); }
+  });
+});

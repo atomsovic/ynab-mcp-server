@@ -1,3 +1,5 @@
+import { authorizedProps, securityConfig } from "./security.js";
+import { accessPolicy } from "../accessPolicy.js";
 import { McpServer, createMcpHandler } from "@modelcontextprotocol/server";
 import * as ynab from "ynab";
 
@@ -26,6 +28,7 @@ function applyEnv(env: WorkerEnv) {
 }
 
 export function createServer(env: WorkerEnv) {
+  const policy = accessPolicy(env);
   applyEnv(env);
 
   const server = new McpServer({
@@ -35,7 +38,7 @@ export function createServer(env: WorkerEnv) {
 
   const api = new ynab.API(env.YNAB_API_TOKEN);
   registerAll(server, api, {
-    readOnly: env.YNAB_READ_ONLY === "true",
+    ...policy,
     categoryAudit: env.CATEGORY_AUDIT ? new R2CategoryAuditStore(env.CATEGORY_AUDIT) : undefined,
   });
 
@@ -47,7 +50,13 @@ export function createServer(env: WorkerEnv) {
  * token, so every request here belongs to an authorized grant.
  */
 export const McpApiHandler = {
-  async fetch(request: Request, env: WorkerEnv): Promise<Response> {
+  async fetch(request: Request, env: WorkerEnv, ctx?: { props?: unknown }): Promise<Response> {
+    try {
+      const config = securityConfig(env);
+      if (new URL(request.url).origin !== config.origin || !authorizedProps(ctx?.props, env, config)) {
+        return new Response("Authorization no longer matches server policy; reconnect", { status: 403, headers: { "cache-control": "no-store" } });
+      }
+    } catch { return new Response("Server configuration unavailable", { status: 503 }); }
     const handler = createMcpHandler(() => createServer(env));
     try {
       return await handler.fetch(request);

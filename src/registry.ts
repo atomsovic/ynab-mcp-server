@@ -1,3 +1,4 @@
+import { CATEGORY_READ_TOOLS, type ToolMode } from "./accessPolicy.js";
 import type { ToolContext } from "./audit/categoryAudit.js";
 import * as GetCategoryAuditTool from "./tools/GetCategoryAuditTool.js";
 import * as ynab from "ynab";
@@ -107,6 +108,7 @@ export interface ToolRegistrar {
 export interface RegisterOptions extends ToolContext {
   /** Register only the read-only tools. */
   readOnly?: boolean;
+  toolMode?: ToolMode;
 }
 
 interface InputSchema {
@@ -173,7 +175,16 @@ function isFailureResult(result: unknown): boolean {
 /** Runs a tool's execute, guaranteeing a failure - thrown or `{success: false}` - comes back as `isError: true`. */
 async function executeTool(module: ToolModule, input: unknown, api: ynab.API, context: ToolContext) {
   try {
-    const result = await module.execute(input, api, context);
+    let scopedInput = input as Record<string, unknown>;
+    if (context.allowedPlanId) {
+      for (const key of ["planId", "budgetId"]) {
+        if (scopedInput[key] !== undefined && scopedInput[key] !== context.allowedPlanId) return toolError("Requested plan is not allowed");
+      }
+      if ("planId" in module.inputSchema || "budgetId" in module.inputSchema) {
+        scopedInput = { ...scopedInput, planId: context.allowedPlanId, budgetId: context.allowedPlanId };
+      }
+    }
+    const result = await module.execute(scopedInput, api, context);
     return isFailureResult(result) ? { ...result, isError: true } : result;
   } catch (error) {
     return toolError(getErrorMessage(error));
@@ -184,6 +195,9 @@ async function executeTool(module: ToolModule, input: unknown, api: ynab.API, co
 export function registerAll(server: ToolRegistrar, api: ynab.API, options: RegisterOptions = {}) {
   const selected = tools.filter((tool) =>
     (!options.readOnly || !tool.writes) &&
+    (options.toolMode !== "read-only" || !tool.writes) &&
+    (!options.toolMode || options.toolMode === "full" || CATEGORY_READ_TOOLS.has(tool.module.name) ||
+      (options.toolMode === "category-only" && tool.module.name === "ynab_apply_category_suggestions")) &&
     (!tool.requiresAiCategorization || SuggestCategoriesTool.isCategorySuggestionEnabled())
   );
 

@@ -7,7 +7,7 @@
 		"nodejs_compat"
 	],
 	"observability": {
-		"enabled": true
+		"enabled": false
 	},
 	// Hourly. The job itself only acts in NAG_HOUR local time, so the reminder
 	// keeps its wall-clock slot across daylight saving changes.
@@ -19,8 +19,7 @@
 			// OAuth grants and tokens. Create with:
 			//   npx wrangler kv namespace create OAUTH_KV
 			"binding": "OAUTH_KV",
-			"id": "REPLACE_WITH_KV_NAMESPACE_ID",
-			"remote": true
+			"id": "REPLACE_WITH_KV_NAMESPACE_ID"
 		}
 	],
 	// Optional: live category application requires a private R2 bucket.
@@ -28,10 +27,20 @@
 	// "r2_buckets": [
 	//   { "binding": "CATEGORY_AUDIT", "bucket_name": "YOUR_PRIVATE_AUDIT_BUCKET" }
 	// ],
+	"durable_objects": {
+		"bindings": [{ "name": "OAUTH_FLOWS", "class_name": "OAuthFlowStore" }]
+	},
+	"migrations": [{ "tag": "v1-oauth-flows", "new_sqlite_classes": ["OAuthFlowStore"] }],
+	"keep_vars": true,
 	"vars": {
 		// Deployment-specific values and credentials are set with
 		// `wrangler secret put`, never committed here.
-		"YNAB_READ_ONLY": "false",
+		"PUBLIC_ORIGIN": "https://ynab-mcp-server.YOUR_SUBDOMAIN.workers.dev",
+		"YNAB_TOOL_MODE": "category-only",
+		// Required runtime vars: YNAB_ALLOWED_PLAN_ID, ALLOWED_GITHUB_LOGIN,
+		// GITHUB_CLIENT_ID, OAUTH_ALLOWED_REDIRECT_URIS (JSON array of exact HTTPS URLs).
+		// Required secrets: YNAB_API_TOKEN and GITHUB_CLIENT_SECRET.
+		// Missing/invalid required configuration keeps authorization closed.
 		// Categorize reminders are disabled unless NAG_CALENDAR_ID and the
 		// GOOGLE_SERVICE_ACCOUNT_JSON secret are configured for a deployment.
 		"NAG_TIMEZONE": "America/Los_Angeles",

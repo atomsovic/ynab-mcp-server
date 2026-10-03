@@ -3,6 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import * as ynab from "ynab";
 
+import { accessPolicy } from "./accessPolicy.js";
 import { FileCategoryAuditStore } from "./audit/fileCategoryAudit.js";
 import { registerAll } from "./registry.js";
 
@@ -15,7 +16,7 @@ const server = new McpServer({
 const api = new ynab.API(process.env.YNAB_API_TOKEN || "");
 
 registerAll(server, api, {
-  readOnly: process.env.YNAB_READ_ONLY === "true",
+  ...accessPolicy(process.env),
   categoryAudit: process.env.YNAB_CATEGORY_AUDIT_DIR
     ? new FileCategoryAuditStore(process.env.YNAB_CATEGORY_AUDIT_DIR) : undefined,
 });

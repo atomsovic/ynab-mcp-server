@@ -1,109 +1,157 @@
-# Deploying as a remote MCP server
+# Deploying the hardened remote MCP server
 
-The stdio server in `src/index.ts` only works on the machine it runs on. To use
-these tools from claude.ai or the Claude mobile app, deploy the Worker in
-`src/worker/` to Cloudflare and add it as a custom connector.
+The Worker admits one configured GitHub login, one explicitly selected YNAB
+plan, and a configured tool mode. The default `category-only` mode exposes reads
+plus audited category application. A YNAB PAT is still account-wide at YNAB;
+this server's restrictions do not protect a stolen PAT used elsewhere.
 
-The Worker holds the YNAB token server-side and puts GitHub sign-in in front of
-it, restricted to a single GitHub account. These are separate layers:
-GitHub sign-in controls who may connect, while the YNAB Personal Access Token
-controls which YNAB account the server reaches. They answer different
-questions, and neither substitutes for the other. The Worker uses one
-server-wide YNAB token, so anyone admitted through GitHub reaches the
-deployer's YNAB account, money, and every plan available to that token—not
-their own YNAB account.
-`ynab_list_plans` lists all of those plans, and a caller-supplied `planId`
-overrides the optional `YNAB_PLAN_ID` default. That matters: the tool set
-includes create, update and delete, so an unauthenticated endpoint would let
-anyone who finds the URL rewrite those plans.
+**No deployment is implied by these instructions or the prepared configuration.**
+Wait for the reviewed commit and passing checks before connecting a deployment
+pipeline. Do not enable automatic deployment of unfinished branches.
 
-## One-time setup
+## Prepared configuration for this account
 
-### 1. Create your local Wrangler config and log in
+`wrangler.atomsovic.jsonc` is committed so a dashboard Git import can use it.
+It contains only nonsecret values supplied by the operator:
 
-The repository provides a template; the real config is git-ignored because it
-contains your account-specific KV namespace ID.
+| Setting/binding | Value |
+| --- | --- |
+| Worker name | `ynab-mcp-server` |
+| `PUBLIC_ORIGIN` | `https://ynab-mcp-server.atomsovic2.workers.dev` |
+| `OAUTH_KV` | KV namespace `44062199539d467695b9db319996689d` |
+| `CATEGORY_AUDIT` | Private R2 bucket `ynab-category-audit` |
+| `OAUTH_FLOWS` | SQLite Durable Object class `OAuthFlowStore` |
+| Migration | `v1-oauth-flows`, `new_sqlite_classes: ["OAuthFlowStore"]` |
+| Tool mode | `category-only` |
 
-```bash
-cp wrangler.example.jsonc wrangler.jsonc
-npx wrangler login
-```
+KV stores provider grants/tokens. R2 stores durable audit evidence. The Durable
+Object stores ten-minute login state and one-use code-redemption gates; its
+binding/class migration is installed by a later deployment, not by creating a
+KV namespace. No R2 API/S3 key or cookie-signing secret is needed. R2 should remain
+Standard storage, private, with no public bucket domain. Bucket/namespace ownership,
+permissions and account billing were not checked through live APIs.
 
-### 2. Create the KV namespace for OAuth grants
+The config enables `keep_vars` for additional dashboard runtime values; values
+explicitly present in the file, such as `PUBLIC_ORIGIN` and `YNAB_TOOL_MODE`, remain
+file-owned. Secrets stay in Cloudflare. Automatic request observability is disabled
+to avoid collecting OAuth callback query strings. No calendar cron or AI processing
+is enabled in this account config.
 
-```bash
-npx wrangler kv namespace create OAUTH_KV
-```
+## Prepare on desktop now
 
-Copy the printed `id` into your local `wrangler.jsonc`, replacing
-`REPLACE_WITH_KV_NAMESPACE_ID`. Do not edit `wrangler.example.jsonc` with your
-account-specific value.
+1. Enable MFA on Cloudflare and GitHub. Keep access to your password manager and
+   MFA available on your phone. Confirm the intended account owns the supplied KV
+   namespace and private bucket, and the workers.dev subdomain is `atomsovic2`.
+2. Choose one YNAB plan. Record its full lowercase UUID from the YNAB web app URL;
+   do not use `last-used`, a plan name, or a default-plan alias as the restriction.
+3. Record the exact HTTPS OAuth callback URL shown/documented by the MCP connector
+   you intend to use. This is the **client's return address**, not the Worker URL
+   below. There is no wildcard or guessed vendor callback. HTTP, localhost and IP
+   literal callbacks are rejected. A connector that only supports loopback OAuth
+   needs a separately reviewed design; do not weaken this allowlist casually.
+4. At GitHub Settings → Developer settings → OAuth Apps, prepare an OAuth App with:
+   - Homepage: `https://ynab-mcp-server.atomsovic2.workers.dev`
+   - Authorization callback: `https://ynab-mcp-server.atomsovic2.workers.dev/callback`
+   These come from the finalized `/callback` handler. Keep the client secret in
+   your password manager, never chat, GitHub source or Build environment settings.
+5. Prepare your YNAB PAT privately and record the allowed GitHub username. The PAT
+   and GitHub client secret are the only required runtime secrets. If you already
+   have these, reuse them without creating extra credentials for R2.
 
-### 3. Create a GitHub OAuth app
+## Dashboard-first deployment after the tested commit is ready
 
-At <https://github.com/settings/developers> → **New OAuth App**:
+Use Cloudflare Workers & Pages (a Worker, not a Pages site), select/connect the
+user's `atomsovic/ynab-mcp-server` repository, and explicitly select the reviewed
+`fix/read-only-durable-category-audit` branch. If the named Worker already exists,
+configure that Worker instead of assuming a new one is needed; this task did not
+inspect its live deployment state.
 
-- **Homepage URL**: `https://ynab-mcp-server.<your-subdomain>.workers.dev`
-- **Authorization callback URL**: `https://ynab-mcp-server.<your-subdomain>.workers.dev/callback`
+Use these build settings:
 
-You get the exact hostname after the first `npm run deploy`; deploy once, then
-fill these in and update them if the name changes.
+| Setting | Value |
+| --- | --- |
+| Root directory | Repository root |
+| Node version | 24 (the tested major) |
+| Build command | `npm ci && npm run test:run && npm run typecheck && npm run build` |
+| Deploy command | `npx wrangler deploy --config wrangler.atomsovic.jsonc` |
 
-### 4. Set deployment values and secrets
+The explicit config argument matters: `wrangler.jsonc` is gitignored and is not
+present in a GitHub checkout. Do not rely on automatic framework detection. Keep
+preview/nonproduction deployments disabled for this private service. Connecting
+Git integration can start a deployment, so do it only when you are ready; the
+first deployed version remains closed with HTTP 503 until required runtime
+configuration is complete. Cloudflare Builds may ask you to authorize its Git
+integration and deployment token; those are account actions you perform, not
+credentials this task created. Review its permissions before approving.
 
-Run each command and paste the value when prompted. Keep deployment-specific
-values out of `wrangler.jsonc`; Wrangler stores them remotely on the Worker.
-Only the GitHub username stored in `ALLOWED_GITHUB_LOGIN` can complete sign-in.
+Cloudflare's [Build configuration](https://developers.cloudflare.com/workers/ci-cd/builds/configuration/)
+distinguishes build-time settings from runtime settings. Put the following under
+**Worker Settings → Variables & Secrets**, not Build variables:
 
-```bash
-npx wrangler secret put ALLOWED_GITHUB_LOGIN
-npx wrangler secret put YNAB_API_TOKEN
-npx wrangler secret put GITHUB_CLIENT_ID
-npx wrangler secret put GITHUB_CLIENT_SECRET
-```
+| Name | Type | Required value |
+| --- | --- | --- |
+| `YNAB_ALLOWED_PLAN_ID` | Text | Your selected lowercase YNAB plan UUID |
+| `ALLOWED_GITHUB_LOGIN` | Text | Your GitHub username (the intended owner is `atomsovic`) |
+| `GITHUB_CLIENT_ID` | Text | ID from your GitHub OAuth App |
+| `OAUTH_ALLOWED_REDIRECT_URIS` | Text | JSON text array containing the exact client callback, e.g. `["https://YOUR_CLIENT/EXACT_CALLBACK"]`; replace the example |
+| `YNAB_API_TOKEN` | Secret | Your YNAB PAT |
+| `GITHUB_CLIENT_SECRET` | Secret | Your GitHub OAuth App secret |
+| `YNAB_READ_ONLY` | Text, optional | `true` for initial read-only use; `false` or absent permits audited category apply |
+| `OAUTH_ALLOWED_CLIENT_IDS` | Text, optional | JSON array of exact already-registered MCP client IDs for additional pinning |
 
-Optionally pin a default plan so tool calls can omit `planId`:
+The allowlist settings are **Text containing JSON**, not Cloudflare JSON-object
+bindings. Leave `YNAB_PLAN_ID`/`YNAB_BUDGET_ID` unset, or set them to exactly the
+selected UUID. Omit optional client-ID pinning until you know your connector's
+registered ID; the consent screen shows it. Redirect allowlisting and explicit
+consent are mandatory even without ID pinning. Client names are unverified labels.
+Existing bad/empty values fail closed, rather than silently broadening access.
 
-```bash
-npx wrangler secret put YNAB_PLAN_ID
-```
+Choose retention/backups for the audit bucket. Verify the deployed Bindings tab
+shows all three bindings above. If the deployment account lacks Durable Object,
+KV or R2 permissions, stop and resolve the account-specific error. Do not make a
+new public bucket or substitute in-memory state. This guide cannot guarantee
+account-specific dashboard actions or billing eligibility.
 
-`YNAB_BUDGET_ID` is deprecated but still accepted as an alias; there is no
-removal date. Use `YNAB_PLAN_ID` for new deployments.
+## Finish from your phone
 
-Set the operator-owned TypeSafe credential as a Worker secret:
+After the tested deployment/build integration exists, a phone browser can be used
+to enter/save runtime values, inspect build status, and open your MCP client's
+connector settings. Dashboard/GitHub screens may require desktop-site mode; a
+fully phone-only first deployment is not promised.
 
-```bash
-npx wrangler secret put TYPESAFE_API_KEY
-```
+Set the MCP server URL to:
+`https://ynab-mcp-server.atomsovic2.workers.dev/mcp`.
+The connector discovers `/authorize`, `/token` and `/register`; do not register
+those endpoints as the GitHub callback. Review the server's consent page for the
+client ID, exact return address, selected plan and access mode, approve it, then
+sign in to GitHub as the allowed account. Use one active login tab; starting a
+second replaces the browser-binding cookie. Finish within ten minutes.
 
-Category suggestions remain off unless you also add
-`"YNAB_AI_CATEGORIZATION": "true"` under `vars` in `wrangler.jsonc`. Both
-settings are required to expose `ynab_suggest_categories`; the key never
-belongs in `wrangler.jsonc` or a tool argument.
+Start with `YNAB_READ_ONLY=true` if you want to verify reading first. To permit
+category writes later, change it to `false` and reconnect. Grants bind to the
+selected plan and effective mode; changing either requires reconnecting. A failed
+or interrupted code exchange also requires starting again, not replaying an old
+code. No unauthenticated route exposes the Durable Object's internal actions.
 
-### 6. Deploy
+Missing configuration, denied identity, failed storage or old grants do not grant
+access. Standard provider KV propagation can still cause transient connection
+failures; retry by starting a new authorization. Token/grant revocation and refresh
+rotation remain provider responsibilities; the added atomic guard specifically
+covers consent, GitHub callback and authorization-code redemption. It is not a
+blanket guarantee about every OAuth replay scenario.
 
-```bash
-npm run deploy
-```
-
-## Add the connector in Claude
-
-1. claude.ai → Settings → Connectors → **Add custom connector**
-2. Name: `YNAB`
-3. URL: `https://ynab-mcp-server.<your-subdomain>.workers.dev/mcp`
-4. Connect, and complete the GitHub sign-in when prompted
-
-Once connected it works everywhere you are signed in to Claude, including the
-mobile app. Your Mac does not need to be running.
+For a local CLI deployment instead, after explicitly deciding to deploy:
+`npx wrangler deploy --config wrangler.atomsovic.jsonc`. Other operators should
+copy `wrangler.example.jsonc` to ignored `wrangler.jsonc`, replace placeholders and
+configure their own resources. Avoid using the account-specific config elsewhere.
 
 ## Categorize reminders (optional)
 
 The Worker can drop a reminder on a Google Calendar when transactions are
 waiting to be categorized. It runs hourly and acts once a day, in the local
 hour you choose. With no service account configured the job is a no-op, so this
-is entirely opt-in.
+is entirely opt-in. The account-specific config has no cron; add one explicitly
+if enabling reminders. Reminders also use `YNAB_ALLOWED_PLAN_ID`.
 
 ### 1. Create a service account
 
@@ -209,7 +257,8 @@ by the Worker.
 
 To expose only the tools that read data and none that change it, set
 `YNAB_READ_ONLY` to `"true"` in `wrangler.jsonc` and redeploy. The write tools
-disappear from `tools/list` entirely rather than failing when called. The
+disappear from `tools/list`; direct calls to their names are rejected. Reconnect
+after changing the effective mode. The
 TypeSafe preview is registered as read-only and remains available in this mode
 only when both its feature flag and secret are configured.
 
@@ -219,7 +268,9 @@ only when both its feature flag and secret are configured.
 npm run dev:worker
 ```
 
-Uses `.dev.vars` for secrets (git-ignored). The OAuth flow needs a real GitHub
+Uses `.dev.vars` for local synthetic values (git-ignored). Secure cookies and the
+canonical HTTPS origin are required; do not disable these checks for HTTP
+localhost. Use the synthetic test suite for offline authorization checks. The OAuth flow needs a real GitHub
 app to complete end to end; without one you can still exercise the unauthorized
 paths and the OAuth metadata endpoints.
 

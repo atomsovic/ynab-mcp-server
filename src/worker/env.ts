@@ -1,7 +1,16 @@
+import type { AccessEnvironment } from "../accessPolicy.js";
 import type { AuditBucket } from "./categoryAudit.js";
 
 /** Bindings and secrets the Worker expects. Secrets are set with `wrangler secret put`. */
-export interface WorkerEnv {
+export interface WorkerEnv extends AccessEnvironment {
+  /** Canonical HTTPS Worker origin, with no trailing slash. */
+  PUBLIC_ORIGIN?: string;
+  /** JSON arrays of exact approved HTTPS callback URLs and optional client IDs. */
+  OAUTH_ALLOWED_REDIRECT_URIS?: string;
+  OAUTH_ALLOWED_CLIENT_IDS?: string;
+  /** Atomic, expiring browser authorization transactions. */
+  OAUTH_FLOWS?: DurableObjectNamespace;
+  OAUTH_KV?: KVNamespace;
   /** YNAB Personal Access Token. Secret — never sent to the client. */
   YNAB_API_TOKEN: string;
   /** Optional default plan, so tool calls can omit planId. */

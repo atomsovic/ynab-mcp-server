@@ -1,3 +1,4 @@
+import { selectedPlan, memoryFlows } from "./helpers/oauth.js";
 import { afterEach, describe, it, expect, vi } from "vitest";
 
 import { createServer, McpApiHandler } from "../worker/mcp.js";
@@ -8,6 +9,10 @@ import type { WorkerEnv } from "../worker/env.js";
 
 const env: WorkerEnv = {
   YNAB_API_TOKEN: "test-token",
+  YNAB_ALLOWED_PLAN_ID: selectedPlan,
+  PUBLIC_ORIGIN: "https://example.com",
+  OAUTH_ALLOWED_REDIRECT_URIS: '["https://client.example/callback"]',
+  OAUTH_FLOWS: memoryFlows() as unknown as DurableObjectNamespace,
   GITHUB_CLIENT_ID: "id",
   GITHUB_CLIENT_SECRET: "secret",
   ALLOWED_GITHUB_LOGIN: "someone",
@@ -23,7 +28,9 @@ async function call(body: unknown, overrides: Partial<WorkerEnv> = {}) {
     },
     body: JSON.stringify(body),
   });
-  return McpApiHandler.fetch(request, { ...env, ...overrides });
+  const configured = { ...env, ...overrides };
+  return McpApiHandler.fetch(request, configured, { props: { version: 1, authorizationId: "a".repeat(64), login: "someone", clientId: "client-1", redirectUri: "https://client.example/callback", origin: "https://example.com", allowedPlanId: selectedPlan,
+    mode: configured.YNAB_READ_ONLY === "true" || configured.YNAB_TOOL_MODE === "read-only" ? "read-only" : configured.YNAB_TOOL_MODE ?? "category-only" } });
 }
 
 /** The handler may answer as JSON or as a single SSE frame; accept both. */
@@ -54,18 +61,18 @@ describe("worker MCP handler", () => {
     vi.stubEnv("YNAB_PLAN_ID", "original-plan");
     vi.stubEnv("YNAB_BUDGET_ID", "original-budget");
 
-    const legacyOnlyServer = createServer({ ...env, YNAB_BUDGET_ID: "legacy-plan" });
+    const legacyOnlyServer = createServer({ ...env, YNAB_BUDGET_ID: selectedPlan });
     expect(process.env.YNAB_PLAN_ID).toBeUndefined();
-    expect(process.env.YNAB_BUDGET_ID).toBe("legacy-plan");
+    expect(process.env.YNAB_BUDGET_ID).toBe(selectedPlan);
     await legacyOnlyServer.close();
 
     const bothServer = createServer({
       ...env,
-      YNAB_PLAN_ID: "canonical-plan",
-      YNAB_BUDGET_ID: "legacy-plan",
+      YNAB_PLAN_ID: selectedPlan,
+      YNAB_BUDGET_ID: selectedPlan,
     });
-    expect(process.env.YNAB_PLAN_ID).toBe("canonical-plan");
-    expect(process.env.YNAB_BUDGET_ID).toBe("legacy-plan");
+    expect(process.env.YNAB_PLAN_ID).toBe(selectedPlan);
+    expect(process.env.YNAB_BUDGET_ID).toBe(selectedPlan);
     await bothServer.close();
   });
 
@@ -80,14 +87,15 @@ describe("worker MCP handler", () => {
     });
   });
 
-  it("serves every tool", async () => {
+  it("serves reads and only audited category writes by default", async () => {
     const response = await call({ jsonrpc: "2.0", id: 2, method: "tools/list" });
     const result = await readResult(response);
 
     const names = result.result.tools.map((t: { name: string }) => t.name);
-    expect(names).toHaveLength(tools.filter((tool) => !tool.requiresAiCategorization).length);
+    expect(names).toHaveLength(tools.filter((tool) => !tool.requiresAiCategorization && (!tool.writes || tool.module.name === "ynab_apply_category_suggestions")).length);
     expect(names).toContain("ynab_budget_summary");
-    expect(names).toContain("ynab_create_transaction");
+    expect(names).not.toContain("ynab_create_transaction");
+    expect(names).toContain("ynab_apply_category_suggestions");
     expect(names).not.toContain("ynab_suggest_categories");
   });
 
@@ -125,7 +133,7 @@ describe("worker MCP handler", () => {
     const fetch = vi.fn(() => { throw new Error("No network in this test"); });
     vi.stubGlobal("fetch", fetch);
     const response = await call({ jsonrpc: "2.0", id: 10, method: "tools/call", params: {
-      name: "ynab_apply_category_suggestions", arguments: { planId: "synthetic", suggestions: [] },
+      name: "ynab_apply_category_suggestions", arguments: { planId: selectedPlan, suggestions: [] },
     } }, { YNAB_READ_ONLY: "true" });
     const result = await readResult(response);
     expect(result.error || result.result?.isError).toBeTruthy();
@@ -156,7 +164,7 @@ describe("worker MCP handler", () => {
     });
     vi.stubGlobal("fetch", fetch);
     const response = await call({ jsonrpc: "2.0", id: 11, method: "tools/call", params: {
-      name: "ynab_apply_category_suggestions", arguments: { planId: "synthetic", suggestions: [{
+      name: "ynab_apply_category_suggestions", arguments: { planId: selectedPlan, suggestions: [{
         transaction_id: "txn-1", category_id: "category",
         expected_content_fingerprint: await contentFingerprint(transaction as ynab.TransactionDetail),
       }] },

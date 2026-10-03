@@ -14,7 +14,7 @@ export async function execute(input: { operation_id: string }, _api: ynab.API, c
   if (!store) return toolError("Category audit storage is not configured");
   try {
     const prepared = await store.read(input.operation_id, "prepared");
-    if (!prepared) return toolError("Category audit operation not found");
+    if (!prepared || (context.allowedPlanId && prepared.plan_id !== context.allowedPlanId)) return toolError("Category audit operation not found");
     const outcome = await store.read(input.operation_id, "outcome");
     return { content: [{ type: "text" as const, text: JSON.stringify({
       success: true, operation_id: input.operation_id,

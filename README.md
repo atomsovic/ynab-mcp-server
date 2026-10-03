@@ -51,7 +51,9 @@ Environment variables:
 | `YNAB_API_TOKEN` | yes | Personal Access Token used for every API call |
 | `YNAB_READ_ONLY` | no | Set to `"true"` to omit all write tools in both local and Worker servers. |
 | `YNAB_CATEGORY_AUDIT_DIR` | for local category writes | Existing private directory on persistent storage for category audit files. See [audit setup](#category-application-audit). |
-| `YNAB_PLAN_ID` | no | Default plan, so tools can omit `planId`. Find it with `ynab_list_plans`. |
+| `YNAB_ALLOWED_PLAN_ID` | yes | One explicit lowercase budget/plan UUID; enforced in both entry points. Omitted tool IDs use it and alternate IDs are rejected. Obtain it from your YNAB app before setup. |
+| `YNAB_TOOL_MODE` | no | `category-only` (default), `read-only`, or explicit `full`. Safe mode exposes reviewed reads plus only audited category application. |
+| `YNAB_PLAN_ID` / `YNAB_BUDGET_ID` | no | Compatibility defaults; if set, must equal `YNAB_ALLOWED_PLAN_ID`. They do not grant access. |
 | `TYPESAFE_API_KEY` | no | Operator-owned TypeSafe credential. Required, but not sufficient, to enable category suggestions. |
 | `YNAB_AI_CATEGORIZATION` | no | Set to `"true"` together with `TYPESAFE_API_KEY` to expose the opt-in suggestion tool. |
 
@@ -65,7 +67,7 @@ Environment variables:
       "args": ["/absolute/path/to/ynab-mcp-server/dist/index.js"],
       "env": {
         "YNAB_API_TOKEN": "your-token",
-        "YNAB_PLAN_ID": "your-plan-id"
+        "YNAB_ALLOWED_PLAN_ID": "11111111-1111-4111-8111-111111111111"
       }
     }
   }
@@ -74,32 +76,17 @@ Environment variables:
 
 ### Remote: phone and claude.ai
 
-The stdio server above cannot be reached from a phone. To use these tools from
-claude.ai or the Claude mobile app, deploy `src/worker/` to Cloudflare Workers
-and add it as a custom connector. [DEPLOY.md](./DEPLOY.md) has the full walk
-through; the shape of it:
+The stdio server cannot be reached from a phone. Deploy `src/worker/` to
+Cloudflare Workers and connect an MCP client using its exact approved callback
+URL. [DEPLOY.md](./DEPLOY.md) includes the dashboard-first setup, required
+bindings and settings, and a desktop-to-phone checklist.
 
-1. Copy `wrangler.example.jsonc` to the git-ignored `wrangler.jsonc`, run
-   `npx wrangler login`, then create the `OAUTH_KV` namespace
-2. `npm run deploy` once to learn your `*.workers.dev` hostname
-3. Create a GitHub OAuth app whose callback is `https://<host>/callback`
-4. Use `npx wrangler secret put` for `ALLOWED_GITHUB_LOGIN`, `YNAB_API_TOKEN`,
-   `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, and `TYPESAFE_API_KEY`
-5. Run `npm run deploy` again
-6. Add `https://<host>/mcp` as a custom connector in claude.ai
-
-The YNAB token stays a Worker secret and never reaches the client. GitHub sign-in
-controls **who may connect** to the remote Worker; the YNAB Personal Access
-Token controls **which YNAB account it reaches**. They answer different
-questions, and neither substitutes for the other. The Worker uses one
-server-wide YNAB token, so anyone admitted through the GitHub gate reaches the
-deployer's YNAB account, money, and every plan available to that token—not
-their own YNAB account.
-`ynab_list_plans` lists all of those plans, and a caller-supplied `planId`
-overrides the optional `YNAB_PLAN_ID` default. Any GitHub account other than
-`ALLOWED_GITHUB_LOGIN` is refused. This matters because the tool set can create
-and delete transactions—an unauthenticated endpoint would grant access to those
-plans to anyone who found the URL.
+GitHub sign-in admits only `ALLOWED_GITHUB_LOGIN`. Every connection requires
+browser-bound consent, an approved client callback and PKCE. The Worker uses
+one server-wide YNAB token, kept as a secret; MCP clients receive access only
+to `YNAB_ALLOWED_PLAN_ID` and the configured tool mode. `ynab_list_plans`
+returns only that plan. The token itself retains its underlying YNAB account
+permissions, so protect it separately from the connector.
 
 ## Why not YNAB OAuth?
 
@@ -117,10 +104,33 @@ account
 Setting `YNAB_READ_ONLY` to `"true"` drops every write tool from the tool list,
 which is worth considering for a connector you will mostly use on a phone.
 
+### Access boundary and migration
+
+Both supported entry points now require `YNAB_ALLOWED_PLAN_ID`; startup or HTTP
+authorization fails closed when it is absent/invalid or a default alias disagrees.
+`ynab_list_plans` and its legacy alias return only that selected plan. Historical
+audit reads for other plans are denied. OAuth grants created before this change,
+or under a different plan/tool policy, require reconnecting.
+
+`category-only` is the default: existing reviewed reads plus
+`ynab_apply_category_suggestions`. General update/create/import/delete/approval,
+budget updates, moves and auto-assign are absent and cannot be called by name.
+`read-only` and `YNAB_READ_ONLY=true` also remove category application. `full`
+explicitly restores general writes **without category audit coverage**, still
+restricted to the selected plan. Do not choose `full` for the protected category
+workflow. The table below catalogs tools, not a promise that every mode exposes
+all of them. Optional TypeSafe processing still requires its separate opt-in.
+
+These boundaries are enforced at server entry/registration, including injected
+plan IDs. Exported tool functions called by custom code are not a security API.
+A stolen YNAB PAT can still access whatever YNAB permits directly; rotate/revoke
+it through YNAB. This server cannot attenuate the PAT itself.
+
 ## Tools
 
-Plan-scoped tools take an optional `planId` that falls back to
-`YNAB_PLAN_ID`. Optional tool inputs may be `null`; the server treats `null`
+Plan-scoped tools accept only the configured `YNAB_ALLOWED_PLAN_ID`. An omitted
+ID uses that plan; both `planId` and the legacy `budgetId` are checked if supplied.
+Optional tool inputs may be `null`; the server treats `null`
 the same as omitting that input. All monetary values — in both directions — are
 plain currency amounts, never YNAB's milliunits; conversion happens in
 `src/tools/money.ts`.

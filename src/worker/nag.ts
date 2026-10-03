@@ -1,3 +1,4 @@
+import { accessPolicy } from "../accessPolicy.js";
 import * as ynab from "ynab";
 
 import { upsertEvent, parseServiceAccountKey, type CalendarEvent } from "./google-calendar.js";
@@ -205,10 +206,9 @@ export async function runNag(env: WorkerEnv, now = new Date()): Promise<NagOutco
     return { ran: false, reason: `local hour ${hour}, today's slot is ${target}` };
   }
 
-  const budgetId = env.YNAB_PLAN_ID || env.YNAB_BUDGET_ID;
-  if (!budgetId) {
-    return { ran: false, reason: "YNAB_PLAN_ID is not set" };
-  }
+  let budgetId: string;
+  try { budgetId = accessPolicy(env).allowedPlanId; }
+  catch { return { ran: false, reason: "selected plan configuration is invalid" }; }
 
   const api = new ynab.API(env.YNAB_API_TOKEN);
   const pending = await getPendingWork(api, budgetId, monthStart(date));
