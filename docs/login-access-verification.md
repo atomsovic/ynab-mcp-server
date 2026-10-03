@@ -93,3 +93,41 @@ env -i PATH="$PATH" XDG_CONFIG_HOME=/tmp/ynab-discovery-bundle/config WRANGLER_S
 
 Result: `--dry-run: exiting now`, 1803.60 KiB (gzip 293.00 KiB). These checks do
 not establish client onboarding compatibility or live OAuth/API behavior.
+
+## Follow-on: native-browser consent regression
+
+A real Chromium form navigation reproduced the consent failure: the page's
+`Referrer-Policy: no-referrer` produced `Origin: null`, which the strict same-origin
+POST check correctly rejected. Existing synthetic requests supplied an Origin
+header manually and missed this browser behavior. After changing only the form
+page to `same-origin`, Chromium exposed a second failure: `form-action 'self'`
+blocked its 302 redirect to GitHub. The consent-page CSP now additionally allows
+only `https://github.com/login/oauth/authorize`. Other pages and redirect responses
+retain the prior CSP and `no-referrer`. No validation guard was relaxed.
+
+`src/tests/oauthConsent.browser.test.ts` serves the actual handler and generated
+form over disposable local HTTPS, drives Chromium's native form submission, and
+intercepts external navigation through DevTools. It covers the browser-generated
+Origin, arrival at the intercepted GitHub destination, rejected CSRF tampering,
+missing cookies, same-form replay and a foreign-origin submission. The production
+handler was not replaced by a mock; storage/provider fixtures are synthetic. No
+live OAuth, YNAB or TypeSafe request is made. Browser DNS is restricted to the local
+fixture and all other page requests are fulfilled locally.
+
+Verification:
+
+- `YNAB_BROWSER_TESTS=true npm run test:run`: **455 tests in 35 files passed**, with
+  Chromium present locally; this includes all five actual-browser cases.
+- `npm run typecheck`, `npm run build`,
+  `node scripts/verify-category-audit-restart.mjs`, `git diff --check`: passed.
+- Isolated Worker bundling passed using the same `/tmp/ynab-discovery-bundle`
+  dry-run command above. No production dependencies or lockfile changes.
+- Independent review found no blockers and independently passed the initial
+  three browser cases together with 20 OAuth security cases.
+
+Run the browser suite alone with `npm run test:browser`. It requires Chromium
+(`CHROMIUM_PATH` can select its binary), OpenSSL, and permission to bind local
+ports. Normal `npm run test:run` skips the browser suite unless
+`YNAB_BROWSER_TESTS=true`, keeping Worker build environments without a browser
+usable. The GitHub PR workflow explicitly runs the browser suite on Node 24 using
+the runner's Chrome/Chromium. iOS/WebKit and a live OAuth round trip are untested.

@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add account-specific nonsecret deployment configuration and desktop/phone setup instructions without deploying resources.
 
 ### Fixed
+- The consent form now preserves the browser-generated POST Origin and permits its narrowly scoped redirect to GitHub. Other responses keep `no-referrer`; origin, cookie, CSRF and replay checks remain mandatory. Added an actual Chromium consent regression.
 - OAuth discovery and unauthenticated MCP challenges now work before private configuration is complete; registration, sign-in, token issuance and authenticated MCP requests still fail closed. Canonical-origin checks apply to discovery too.
 - Worker deployment configs explicitly disable preview URLs instead of relying on dashboard defaults.
 - Worker typechecking no longer inherits the Node configuration’s exclusion of `src/worker`.

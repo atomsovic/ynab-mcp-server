@@ -11,9 +11,13 @@ const securityHeaders = {
   "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
   "x-frame-options": "DENY", "x-content-type-options": "nosniff", "referrer-policy": "no-referrer",
 };
-function html(body: string, status = 200, cookie?: string) {
+function html(body: string, status = 200, cookie?: string, consentForm = false) {
   return new Response(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>YNAB authorization</title>${body}`, {
-    status, headers: { ...securityHeaders, ...(cookie ? { "set-cookie": cookie } : {}) },
+    status, headers: { ...securityHeaders, ...(consentForm ? {
+      "referrer-policy": "same-origin",
+      // Browsers also enforce form-action on the POST's redirect destination.
+      "content-security-policy": securityHeaders["content-security-policy"].replace("form-action 'self'", "form-action 'self' https://github.com/login/oauth/authorize"),
+    } : {}), ...(cookie ? { "set-cookie": cookie } : {}) },
   });
 }
 function escape(value: string) { return value.replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!)); }
@@ -61,7 +65,9 @@ export const GitHubHandler = {
           authRequest, browserHash: await hash(browser), csrfHash: await hash(csrf), expiresAt: Date.now() + 600000,
           stage: "consent", allowedPlanId: config.allowedPlanId, mode: config.mode, origin: config.origin,
         } satisfies PendingFlow });
-        return html(`<h1>Authorize this MCP client?</h1><p>Only approve a connection you started.</p><dl><dt>Client name (unverified)</dt><dd>${escape(client!.clientName ?? "Unnamed")}</dd><dt>Client ID</dt><dd>${escape(authRequest.clientId)}</dd><dt>Return address</dt><dd>${escape(authRequest.redirectUri)}</dd><dt>Selected plan</dt><dd>${escape(config.allowedPlanId)}</dd><dt>Access</dt><dd>${escape(config.mode)}</dd></dl><p>${config.mode === "full" ? "Full mode permits unaudited general writes." : config.mode === "read-only" ? "Reads only; no YNAB changes." : "Reads and audited category application only; no general transaction writes."}</p><form method="post" action="/authorize"><input type="hidden" name="flow" value="${id}"><input type="hidden" name="csrf_token" value="${csrf}"><button name="decision" value="approve">Approve and sign in with GitHub</button><button name="decision" value="deny">Deny</button></form>`, 200, `${COOKIE}=${browser}; ${COOKIE_FLAGS}; Max-Age=600`);
+        // Form POST navigations under no-referrer send Origin:null. Keep the
+        // strict origin check and allow same-origin referrers only on this form.
+        return html(`<h1>Authorize this MCP client?</h1><p>Only approve a connection you started.</p><dl><dt>Client name (unverified)</dt><dd>${escape(client!.clientName ?? "Unnamed")}</dd><dt>Client ID</dt><dd>${escape(authRequest.clientId)}</dd><dt>Return address</dt><dd>${escape(authRequest.redirectUri)}</dd><dt>Selected plan</dt><dd>${escape(config.allowedPlanId)}</dd><dt>Access</dt><dd>${escape(config.mode)}</dd></dl><p>${config.mode === "full" ? "Full mode permits unaudited general writes." : config.mode === "read-only" ? "Reads only; no YNAB changes." : "Reads and audited category application only; no general transaction writes."}</p><form method="post" action="/authorize"><input type="hidden" name="flow" value="${id}"><input type="hidden" name="csrf_token" value="${csrf}"><button name="decision" value="approve">Approve and sign in with GitHub</button><button name="decision" value="deny">Deny</button></form>`, 200, `${COOKIE}=${browser}; ${COOKIE_FLAGS}; Max-Age=600`, true);
       }
       if (url.pathname === "/authorize" && request.method === "POST") {
         if (request.headers.get("origin") !== config.origin || !request.headers.get("content-type")?.startsWith("application/x-www-form-urlencoded")) throw new Error("Invalid consent origin");

@@ -52,7 +52,8 @@
     "typecheck": "tsc --noEmit && tsc -p tsconfig.worker.json",
     "dev:worker": "wrangler dev",
     "deploy": "wrangler deploy",
-    "test:run": "vitest run"
+    "test:run": "vitest run",
+    "test:browser": "YNAB_BROWSER_TESTS=true vitest run src/tests/oauthConsent.browser.test.ts"
   },
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "^0.10.3",

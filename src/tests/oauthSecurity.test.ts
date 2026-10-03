@@ -33,6 +33,8 @@ describe("browser-bound OAuth consent", () => {
     expect(f.response.headers.get("set-cookie")).toMatch(/__Host-ynab_login=.*HttpOnly; Secure; Path=\/; SameSite=Lax/);
     expect(f.response.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
     expect(f.response.headers.get("cache-control")).toBe("no-store");
+    expect(f.response.headers.get("referrer-policy")).toBe("same-origin");
+    expect(f.response.headers.get("content-security-policy")).toContain("form-action 'self' https://github.com/login/oauth/authorize;");
   });
   it("requires consent, then completes one authorization with bound policy", async () => {
     const f = await begin();
@@ -48,6 +50,8 @@ describe("browser-bound OAuth consent", () => {
     expect(result.status).toBe(302);
     expect(f.helpers.completeAuthorization).toHaveBeenCalledWith(expect.objectContaining({ userId: "123", props: expect.objectContaining({ version: 1, login: "owner", clientId: "client-1", allowedPlanId: f.env.YNAB_ALLOWED_PLAN_ID, mode: "category-only" }) }));
     expect(result.headers.get("set-cookie")).toContain("Max-Age=0");
+    expect(result.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(result.headers.get("content-security-policy")).toContain("form-action 'self';");
     expect((await callback(f)).status).toBe(400);
     expect(fetch).toHaveBeenCalledTimes(2);
   });
