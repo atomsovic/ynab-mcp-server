@@ -74,7 +74,7 @@ function makeApi(options: {
           data: {
             transactions: type === ynab.GetTransactionsTypeEnum.Unapproved
               ? candidates
-              : oldTransactions,
+              : _sinceDate ? oldTransactions : [...candidates, ...oldTransactions],
           },
         }),
       ),

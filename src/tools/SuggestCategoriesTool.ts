@@ -1,4 +1,5 @@
 import { resolvePlanId } from "./planId.js";
+import { loadExplicitCategoryCandidates } from "./categoryCandidates.js";
 import { z } from "zod";
 import * as ynab from "ynab";
 
@@ -334,21 +335,7 @@ async function loadCandidates(
   if (ids.length > MAX_LIMIT) {
     throw new Error(`transactionIds must contain at most ${MAX_LIMIT} unique IDs`);
   }
-  const settled = await Promise.allSettled(
-    ids.map((transactionId) => api.transactions.getTransactionById(budgetId, transactionId)),
-  );
-  const transactions: ynab.TransactionDetail[] = [];
-  const failures: CandidateLoad["failures"] = [];
-  settled.forEach((result, index) => {
-    if (result.status === "fulfilled") {
-      if (!result.value.data.transaction.deleted) {
-        transactions.push(result.value.data.transaction);
-      }
-    } else {
-      failures.push({ transactionId: ids[index], error: getErrorMessage(result.reason) });
-    }
-  });
-  return { transactions, failures, mode: "explicit" };
+  return { ...await loadExplicitCategoryCandidates(api, budgetId, ids), mode: "explicit" };
 }
 
 /**

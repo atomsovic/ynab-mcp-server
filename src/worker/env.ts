@@ -13,6 +13,8 @@ export interface WorkerEnv extends AccessEnvironment {
   OAUTH_KV?: KVNamespace;
   /** Durable active authorization and replacement fencing; separate from expiring flows. */
   OAUTH_GRANTS?: DurableObjectNamespace;
+  /** Private per-user selected-plan snapshots and advisory review queues. */
+  PLAN_STAGING?: DurableObjectNamespace;
   /** YNAB Personal Access Token. Secret — never sent to the client. */
   YNAB_API_TOKEN: string;
   /** Optional default plan, so tool calls can omit planId. */

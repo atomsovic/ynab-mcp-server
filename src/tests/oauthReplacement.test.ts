@@ -132,6 +132,31 @@ describe('OAuth replacement failure boundaries',()=>{
 });
 
 describe('authenticated discovery diagnostics',()=>{
+ it.each([true, false])('matches tools/list with private staging enabled (AI enabled=%s)', async aiEnabled => {
+  const f=fixture(),client=await register(f),{t}=await login(f,client);
+  const stagingFetch=vi.fn(async()=>{throw Error('Discovery must not access staged financial data');});
+  const idFromName=vi.fn((name:string)=>name);
+  f.env.PLAN_STAGING={idFromName,get:vi.fn(()=>({fetch:stagingFetch}))} as unknown as DurableObjectNamespace;
+  if(!aiEnabled) delete f.env.TYPESAFE_API_KEY;
+  f.upstream.mockClear();
+
+  const diagnosticResponse=await f.call('/mcp/diagnostics',{headers:{authorization:'Bearer '+t.access_token}});
+  expect(diagnosticResponse.status).toBe(200);
+  const diagnostics=await diagnosticResponse.json() as {registeredToolCount:number;suggestionsRegistered:boolean};
+  const listedResponse=await list(f,t.access_token);
+  expect(listedResponse.status).toBe(200);
+  const text=await listedResponse.text();
+  const dataLine=text.split('\n').find(line=>line.startsWith('data:'));
+  const listed=JSON.parse(dataLine?dataLine.slice(5).trim():text).result.tools as {name:string}[];
+  expect(listed.map(tool=>tool.name)).toEqual(expect.arrayContaining([
+   'ynab_staging_status','ynab_sync_plan','ynab_category_review_queue','ynab_clear_staging',
+  ]));
+  expect(diagnostics.registeredToolCount).toBe(listed.length);
+  expect(diagnostics.suggestionsRegistered).toBe(aiEnabled);
+  expect(idFromName).toHaveBeenCalledWith(JSON.stringify(['123',f.env.YNAB_ALLOWED_PLAN_ID]));
+  expect(stagingFetch).not.toHaveBeenCalled();
+  expect(f.upstream).not.toHaveBeenCalled();
+ });
  it('reports effective gates without credentials, identities or financial data',async()=>{
   const f=fixture(),client=await register(f),{t}=await login(f,client);
   expect((await f.call('/mcp/diagnostics')).status).toBe(401);

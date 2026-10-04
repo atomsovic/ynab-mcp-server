@@ -16,7 +16,7 @@ function register(api: ynab.API = {} as ynab.API) {
       registered.set(name, { config, callback });
     },
   };
-  registerAll(server, api);
+  registerAll(server, api, { staging: {} as any });
   return registered;
 }
 
@@ -106,7 +106,7 @@ describe("tool registration", () => {
       const annotations = registered.get(tool.module.name)?.config.annotations;
       expect(annotations, tool.module.name).toEqual({
         title: tool.title,
-        readOnlyHint: !tool.writes,
+        readOnlyHint: !tool.writes && !tool.localWrites && tool.module.name !== "ynab_suggest_categories",
         destructiveHint: Boolean(tool.destructive),
         idempotentHint: Boolean(tool.idempotent),
         openWorldHint: true,

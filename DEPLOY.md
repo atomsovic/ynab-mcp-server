@@ -369,3 +369,11 @@ This endpoint distinguishes effective Worker registration from client metadata;
 it does not fix or reveal ChatGPT's internal **Refresh tools** failure. Keep that
 issue separate and inspect its sanitized status/error using the newly valid
 connection.
+
+### Private plan staging (prepared, deployment approval required)
+
+The new `PLAN_STAGING` SQLite binding and `v3-plan-staging` migration add
+on-demand snapshots and an advisory category review queue. Read the
+[operation, retention, limits, migration and cost review](./docs/private-plan-staging.md)
+before publishing this change. Existing OAuth migrations and R2 audit remain
+required. No live verification or deployment is included in this change.

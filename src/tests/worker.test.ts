@@ -97,8 +97,9 @@ describe("worker MCP handler", () => {
     const result = await readResult(response);
 
     const names = result.result.tools.map((t: { name: string }) => t.name);
-    expect(names).toHaveLength(tools.filter((tool) => !tool.requiresAiCategorization && (!tool.writes || tool.module.name === "ynab_apply_category_suggestions")).length);
+    expect(names).toHaveLength(tools.filter((tool) => !tool.requiresAiCategorization && !tool.requiresStaging && (!tool.writes || tool.module.name === "ynab_apply_category_suggestions")).length);
     expect(names).toContain("ynab_budget_summary");
+    expect(names).not.toContain("ynab_sync_plan");
     expect(names).not.toContain("ynab_create_transaction");
     expect(names).toContain("ynab_apply_category_suggestions");
     expect(names).not.toContain("ynab_suggest_categories");
@@ -131,6 +132,7 @@ describe("worker MCP handler", () => {
 
     const names = result.result.tools.map((t: { name: string }) => t.name);
     expect(names).toContain("ynab_budget_summary");
+    expect(names).not.toContain("ynab_sync_plan");
     expect(names).not.toContain("ynab_create_transaction");
     expect(names).not.toContain("ynab_delete_transaction");
   });

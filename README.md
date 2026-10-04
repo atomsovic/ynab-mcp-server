@@ -23,8 +23,9 @@ It runs two ways from one codebase:
   claude.ai as a custom connector, so it works from the web and the mobile app
   with your computer switched off. See [DEPLOY.md](./DEPLOY.md).
 
-Both entry points register the same tools from `src/registry.ts`, so a tool
-written once is available in both.
+Both entry points use `src/registry.ts`. Worker-only private staging tools
+are exposed when the authenticated `PLAN_STAGING` binding is configured. See
+[private staging behavior and retention](./docs/private-plan-staging.md).
 
 Other providers:
 

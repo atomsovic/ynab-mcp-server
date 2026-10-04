@@ -30,9 +30,9 @@
 	//   { "binding": "CATEGORY_AUDIT", "bucket_name": "YOUR_PRIVATE_AUDIT_BUCKET" }
 	// ],
 	"durable_objects": {
-		"bindings": [{ "name": "OAUTH_FLOWS", "class_name": "OAuthFlowStore" }, { "name": "OAUTH_GRANTS", "class_name": "OAuthGrantStore" }]
+		"bindings": [{ "name": "OAUTH_FLOWS", "class_name": "OAuthFlowStore" }, { "name": "OAUTH_GRANTS", "class_name": "OAuthGrantStore" }, { "name": "PLAN_STAGING", "class_name": "PlanStagingStore" }]
 	},
-	"migrations": [{ "tag": "v1-oauth-flows", "new_sqlite_classes": ["OAuthFlowStore"] }, { "tag": "v2-oauth-grants", "new_sqlite_classes": ["OAuthGrantStore"] }],
+	"migrations": [{ "tag": "v1-oauth-flows", "new_sqlite_classes": ["OAuthFlowStore"] }, { "tag": "v2-oauth-grants", "new_sqlite_classes": ["OAuthGrantStore"] }, { "tag": "v3-plan-staging", "new_sqlite_classes": ["PlanStagingStore"] }],
 	"keep_vars": true,
 	"vars": {
 		// Deployment-specific values and credentials are set with

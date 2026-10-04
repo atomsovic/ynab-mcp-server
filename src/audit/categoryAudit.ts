@@ -1,3 +1,4 @@
+import type { PlanStaging } from "../staging/types.js";
 /** Minimal state required to review and manually reverse a category-only change. */
 export interface CategoryUndo {
   transaction_id: string;
@@ -34,7 +35,7 @@ export interface CategoryAuditStore {
   write(record: CategoryAuditRecord): Promise<void>;
   read(operationId: string, phase: AuditPhase): Promise<CategoryAuditRecord | null>;
 }
-export interface ToolContext { categoryAudit?: CategoryAuditStore; allowedPlanId?: string }
+export interface ToolContext { categoryAudit?: CategoryAuditStore; allowedPlanId?: string; staging?: PlanStaging }
 
 export function auditFilename(operationId: string, phase: AuditPhase): string {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(operationId) ||

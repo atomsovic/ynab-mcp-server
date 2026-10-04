@@ -1,3 +1,4 @@
+import { DurablePlanStaging } from "./staging-client.js";
 import { checkGrant, GrantUnavailable } from "./oauth-grants.js";
 import { authorizedProps, securityConfig } from "./security.js";
 import { accessPolicy } from "../accessPolicy.js";
@@ -28,7 +29,7 @@ function applyEnv(env: WorkerEnv) {
   }
 }
 
-export function createServer(env: WorkerEnv) {
+export function createServer(env: WorkerEnv, userId?: string) {
   const policy = accessPolicy(env);
   applyEnv(env);
 
@@ -40,6 +41,7 @@ export function createServer(env: WorkerEnv) {
   const api = new ynab.API(env.YNAB_API_TOKEN);
   registerAll(server, api, {
     ...policy,
+    staging: env.PLAN_STAGING && userId ? new DurablePlanStaging(env.PLAN_STAGING, { userId, planId: policy.allowedPlanId }) : undefined,
     categoryAudit: env.CATEGORY_AUDIT ? new R2CategoryAuditStore(env.CATEGORY_AUDIT) : undefined,
   });
 
@@ -69,14 +71,14 @@ export const McpApiHandler = {
       if (request.method !== "GET") return new Response(null, { status: 405, headers: { allow: "GET", "cache-control": "no-store" } });
       applyEnv(env);
       const policy = accessPolicy(env), names: string[] = [];
-      registerAll({ registerTool(name) { names.push(name); } }, {} as ynab.API, policy);
+      registerAll({ registerTool(name) { names.push(name); } }, {} as ynab.API, { ...policy, staging: env.PLAN_STAGING ? new DurablePlanStaging(env.PLAN_STAGING, { userId: (ctx?.props as { userId: string }).userId, planId: policy.allowedPlanId }) : undefined });
       return Response.json({
         authorizationVersion: 2, toolMode: policy.toolMode, readOnly: policy.readOnly,
         aiOptInEnabled: env.YNAB_AI_CATEGORIZATION === "true", aiKeyConfigured: Boolean(env.TYPESAFE_API_KEY),
         suggestionsRegistered: names.includes("ynab_suggest_categories"), registeredToolCount: names.length,
       }, { headers: { "cache-control": "no-store" } });
     }
-    const handler = createMcpHandler(() => createServer(env));
+    const handler = createMcpHandler(() => createServer(env, (ctx?.props as { userId: string }).userId));
     try {
       return await handler.fetch(request);
     } finally {

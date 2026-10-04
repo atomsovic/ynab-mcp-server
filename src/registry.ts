@@ -1,3 +1,5 @@
+import { statusTool, syncTool, reviewsTool, clearTool } from "./tools/StagingTools.js";
+import { STAGED_READ_TOOLS, snapshotApi, attachStagingMetadata, persistSuggestionReviews } from "./staging/integration.js";
 import { CATEGORY_READ_TOOLS, type ToolMode } from "./accessPolicy.js";
 import type { ToolContext } from "./audit/categoryAudit.js";
 import * as GetCategoryAuditTool from "./tools/GetCategoryAuditTool.js";
@@ -49,6 +51,8 @@ export interface ToolEntry {
   idempotent?: boolean;
   /** Tool is omitted unless the operator explicitly enables AI categorization. */
   requiresAiCategorization?: boolean;
+  requiresStaging?: boolean;
+  localWrites?: boolean;
   /** Cross-field validation applied to the wrapped input schema at registration. */
   refine?: (schema: z.ZodObject<z.ZodRawShape>) => z.ZodTypeAny;
 }
@@ -94,6 +98,10 @@ export const tools: ToolEntry[] = [
   { title: "Suggest Categories", module: SuggestCategoriesTool, writes: false, requiresAiCategorization: true },
   { title: "Get Category Audit", module: GetCategoryAuditTool, writes: false },
   { title: "Apply Category Suggestions", module: ApplyCategorySuggestionsTool, writes: true, idempotent: true },
+  { title: "Staging Status", module: statusTool, writes: false, requiresStaging: true },
+  { title: "Sync Private Plan", module: syncTool, writes: false, requiresStaging: true, localWrites: true },
+  { title: "Category Review Queue", module: reviewsTool, writes: false, requiresStaging: true, localWrites: true },
+  { title: "Clear Private Staging", module: clearTool, writes: false, requiresStaging: true, localWrites: true, destructive: true },
 ];
 
 /**
@@ -147,7 +155,7 @@ function nullCompatibleInputSchema(inputSchema: Record<string, unknown>) {
 function buildAnnotations(tool: ToolEntry) {
   return {
     title: tool.title,
-    readOnlyHint: !tool.writes,
+    readOnlyHint: !tool.writes && !tool.localWrites,
     destructiveHint: Boolean(tool.destructive),
     idempotentHint: Boolean(tool.idempotent),
     openWorldHint: true,
@@ -184,7 +192,23 @@ async function executeTool(module: ToolModule, input: unknown, api: ynab.API, co
         scopedInput = { ...scopedInput, planId: context.allowedPlanId, budgetId: context.allowedPlanId };
       }
     }
-    const result = await module.execute(scopedInput, api, context);
+    let result;
+    if (context.staging && context.allowedPlanId && STAGED_READ_TOOLS.has(module.name)) {
+      const snapshot = await context.staging.snapshot();
+      const explicitIds = scopedInput.transactionIds;
+      const retained = new Set(snapshot.transactions.map(row => row.id));
+      const liveExplicit = module.name === "ynab_suggest_categories" && Array.isArray(explicitIds) && explicitIds.some(id => !retained.has(id));
+      // Entire live fallback preserves explicit old/pending inspection semantics;
+      // never mix live candidates with staged history or label it a staged revision.
+      result = await module.execute(scopedInput, liveExplicit ? api : snapshotApi(api, snapshot, context.allowedPlanId), context);
+      if (module.name === "ynab_suggest_categories" && !liveExplicit) result = await persistSuggestionReviews(context.staging, snapshot, result);
+      result = attachStagingMetadata(result, snapshot, liveExplicit ? "live_explicit_fallback" : "snapshot");
+      if (liveExplicit) {
+        const body = JSON.parse(result.content[0].text);
+        body.review_persistence = { saved: false, reason: "Explicit selection includes rows outside the retained snapshot; live inspection was not staged." };
+        result.content[0].text = JSON.stringify(body, null, 2);
+      }
+    } else result = await module.execute(scopedInput, api, context);
     return isFailureResult(result) ? { ...result, isError: true } : result;
   } catch (error) {
     return toolError(getErrorMessage(error));
@@ -198,7 +222,8 @@ export function registerAll(server: ToolRegistrar, api: ynab.API, options: Regis
     (options.toolMode !== "read-only" || !tool.writes) &&
     (!options.toolMode || options.toolMode === "full" || CATEGORY_READ_TOOLS.has(tool.module.name) ||
       (options.toolMode === "category-only" && tool.module.name === "ynab_apply_category_suggestions")) &&
-    (!tool.requiresAiCategorization || SuggestCategoriesTool.isCategorySuggestionEnabled())
+    (!tool.requiresAiCategorization || SuggestCategoriesTool.isCategorySuggestionEnabled()) &&
+    (!tool.requiresStaging || Boolean(options.staging))
   );
 
   for (const tool of selected) {
@@ -208,9 +233,9 @@ export function registerAll(server: ToolRegistrar, api: ynab.API, options: Regis
 
     server.registerTool(module.name, {
       title,
-      description: module.description,
+      description: module.description + (options.staging && module.name === "ynab_suggest_categories" ? " Saves eligible proposals to the private advisory review queue; does not change YNAB." : ""),
       inputSchema,
-      annotations: buildAnnotations(tool),
+      annotations: { ...buildAnnotations(tool), ...(options.staging && module.name === "ynab_suggest_categories" ? { readOnlyHint: false } : {}) },
     }, async (input: any) => executeTool(module, omitNullOptionalInputs(input, module.inputSchema), api, options));
   }
 

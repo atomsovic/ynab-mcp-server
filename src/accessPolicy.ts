@@ -29,4 +29,5 @@ export const CATEGORY_READ_TOOLS = new Set([
   "ynab_list_categories", "ynab_list_accounts", "ynab_list_scheduled_transactions", "ynab_list_months",
   "ynab_spending_by_payee", "ynab_spending_by_category", "ynab_cash_flow",
   "ynab_suggest_categories", "ynab_get_category_audit",
+  "ynab_staging_status", "ynab_sync_plan", "ynab_category_review_queue", "ynab_clear_staging",
 ]);
