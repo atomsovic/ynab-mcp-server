@@ -263,6 +263,13 @@ alternatives, and history summary. Applying a suggestion remains a separate,
 explicit human decision using `ynab_apply_category_suggestions` (or the general
 `ynab_update_transaction` tool).
 
+Malformed TypeSafe answers fail closed per row. Their `provider_validation`
+field identifies the rejected check using a fixed code, the expected option
+count, and (where applicable) the received option count or probability sum.
+It never includes provider payloads or option labels. See
+[TypeSafe validation investigation](docs/typesafe-validation-investigation.md)
+for the current investigation and diagnostic interpretation.
+
 Enabling this feature sends the transaction's display payee, imported/original
 payee, memo, amount, date, and account name/type/on-budget status, plus visible
 category group and category names, to **TypeSafe as a third-party processor**.

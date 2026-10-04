@@ -566,6 +566,62 @@ describe("SuggestCategoriesTool", () => {
     expect(requestBody).toContain("MARKET #123");
   });
 
+  it("accepts a documented three-row Choice response with 52 eligible categories", async () => {
+    const categories = Array.from({ length: 52 }, (_, index) => category(`category-${index}`, `Category ${index}`));
+    const api = makeApi({
+      candidates: [transaction("first"), transaction("second"), transaction("third")],
+      groups: [group("synthetic", "Synthetic", categories)],
+    });
+    const probabilities = Object.fromEntries(Array.from({ length: 52 }, (_, index) =>
+      [`c${String(index).padStart(3, "0")}`, index === 0 ? 0.948 : 0.001]));
+    probabilities.leave_uncategorized = 0.001;
+    const fetchMock = vi.fn().mockResolvedValue(choiceResponse(Object.fromEntries(
+      ["t00", "t01", "t02"].map((key) => [key, answer("c000", 0.9, probabilities)]),
+    )));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const output = await result({}, api);
+
+    expect(output).toMatchObject({ dry_run: true, eligible_category_count: 52, provider_calls: 1 });
+    expect(output.transactions.map((row: any) => row.status)).toEqual(["suggested", "suggested", "suggested"]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(api.transactions).not.toHaveProperty("updateTransaction");
+  });
+
+  it.each([
+    ["missing_answer", undefined],
+    ["invalid_answer", null],
+    ["invalid_answer", []],
+    ["invalid_answer_type", { choice: "c000", confidence: 1, probabilities: { c000: 1, c001: 0, leave_uncategorized: 0 } }],
+    ["invalid_answer_type", { type: "private-provider-value" }],
+    ["invalid_choice", answer("private-provider-value", 0.9, {})],
+    ["invalid_confidence", answer("c000", -0.1, {})],
+    ["invalid_confidence", answer("c000", 1.1, {})],
+    ["invalid_probabilities", { type: "choice", choice: "c000", confidence: 0.9, probabilities: [] }],
+    ["probability_keys_mismatch", answer("c000", 0.9, { c000: 1 })],
+    ["probability_keys_mismatch", answer("c000", 0.9, { c000: 1, c001: 0, "private-provider-value": 0 })],
+    ["invalid_probability_value", answer("c000", 0.9, { c000: 1.1, c001: -0.1, leave_uncategorized: 0 })],
+    ["invalid_probability_sum", answer("c000", 0.9, { c000: 0.9, c001: 0.05, leave_uncategorized: 0.04999 })],
+    ["choice_not_maximum", answer("c000", 0.9, { c000: 0.1, c001: 0.8, leave_uncategorized: 0.1 })],
+  ])("reports safe %s diagnostics while failing closed", async (code, value) => {
+    const api = makeApi();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(choiceResponse({ t00: value })));
+
+    const output = await result({}, api);
+
+    expect(output.transactions[0]).toMatchObject({
+      status: "failed",
+      proposed_category: null,
+      error: "TypeSafe returned a missing or malformed Choice answer",
+      provider_validation: { code, expected_option_count: 3 },
+    });
+    if (code === "invalid_probability_sum") {
+      expect(output.transactions[0].provider_validation.probability_sum).toBeCloseTo(0.99999, 10);
+    }
+    expect(JSON.stringify(output)).not.toContain("private-provider-value");
+    expect(api.transactions).not.toHaveProperty("updateTransaction");
+  });
+
   it("rejects inconsistent Choice probability distributions per row", async () => {
     const api = makeApi({ candidates: [
       transaction("wrong-winner"),

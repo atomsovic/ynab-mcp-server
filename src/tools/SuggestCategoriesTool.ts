@@ -548,31 +548,53 @@ export function preflightTypeSafeRequest(body: ReturnType<typeof buildTypeSafeRe
   };
 }
 
-function isChoiceAnswer(value: unknown, validKeys: Set<string>): value is ChoiceAnswer {
-  if (!value || typeof value !== "object") return false;
+type ChoiceValidationCode =
+  | "missing_answer" | "invalid_answer" | "invalid_answer_type" | "invalid_choice"
+  | "invalid_confidence" | "invalid_probabilities" | "probability_keys_mismatch"
+  | "invalid_probability_value" | "invalid_probability_sum" | "choice_not_maximum";
+
+interface ChoiceValidationFailure {
+  code: ChoiceValidationCode;
+  expected_option_count: number;
+  received_option_count?: number;
+  probability_sum?: number;
+}
+
+function validateChoiceAnswer(value: unknown, validKeys: Set<string>):
+  { answer: ChoiceAnswer; failure?: never } | { answer?: never; failure: ChoiceValidationFailure } {
+  // Only allowlisted codes and aggregate numbers leave this boundary. Never return
+  // provider fields, labels, or payload excerpts in diagnostics.
+  const failure = (code: ChoiceValidationCode, details: { received_option_count?: number; probability_sum?: number } = {}) =>
+    ({ failure: { code, expected_option_count: validKeys.size, ...details } });
+  if (value === undefined) return failure("missing_answer");
+  if (!value || typeof value !== "object" || Array.isArray(value)) return failure("invalid_answer");
   const answer = value as Partial<ChoiceAnswer>;
-  if (
-    answer.type !== "choice" ||
-    typeof answer.choice !== "string" ||
-    !validKeys.has(answer.choice) ||
-    typeof answer.confidence !== "number" ||
-    !Number.isFinite(answer.confidence) ||
-    answer.confidence < 0 ||
-    answer.confidence > 1 ||
-    !answer.probabilities ||
-    typeof answer.probabilities !== "object"
-  ) return false;
+  if (answer.type !== "choice") return failure("invalid_answer_type");
+  if (typeof answer.choice !== "string" || !validKeys.has(answer.choice)) return failure("invalid_choice");
+  if (typeof answer.confidence !== "number" || !Number.isFinite(answer.confidence) ||
+    answer.confidence < 0 || answer.confidence > 1) return failure("invalid_confidence");
+  if (!answer.probabilities || typeof answer.probabilities !== "object" || Array.isArray(answer.probabilities)) {
+    return failure("invalid_probabilities");
+  }
   const entries = Object.entries(answer.probabilities);
-  if (entries.length !== validKeys.size) return false;
-  const validProbabilities = entries.every(([key, probability]) =>
-    validKeys.has(key) && typeof probability === "number" && Number.isFinite(probability) && probability >= 0 && probability <= 1
-  ) && [...validKeys].every((key) => typeof answer.probabilities?.[key] === "number");
-  if (!validProbabilities) return false;
+  const details = { received_option_count: entries.length };
+  if (entries.length !== validKeys.size || !entries.every(([key]) => validKeys.has(key))) {
+    return failure("probability_keys_mismatch", details);
+  }
+  if (!entries.every(([, probability]) => typeof probability === "number" &&
+    Number.isFinite(probability) && probability >= 0 && probability <= 1)) {
+    return failure("invalid_probability_value", details);
+  }
   const tolerance = 1e-6;
   const totalProbability = entries.reduce((total, [, probability]) => total + probability, 0);
+  if (Math.abs(totalProbability - 1) > tolerance) {
+    return failure("invalid_probability_sum", { ...details, probability_sum: totalProbability });
+  }
   const highestProbability = Math.max(...entries.map(([, probability]) => probability));
-  return Math.abs(totalProbability - 1) <= tolerance &&
-    answer.probabilities[answer.choice] >= highestProbability - tolerance;
+  if (answer.probabilities[answer.choice] < highestProbability - tolerance) {
+    return failure("choice_not_maximum", details);
+  }
+  return { answer: answer as ChoiceAnswer };
 }
 
 async function callTypeSafe(body: ReturnType<typeof buildTypeSafeRequest>, apiKey: string): Promise<TypeSafeResponse> {
@@ -906,17 +928,21 @@ export async function execute(input: SuggestCategoriesInput, api: ynab.API) {
       outputTokens += response.usage.output_tokens;
 
       batch.forEach((transaction, index) => {
-        const answer = response.answers[`t${String(index).padStart(2, "0")}`];
-        if (!isChoiceAnswer(answer, validKeys)) {
-          outputRows.push(failedRow(
-            transaction.id,
-            "TypeSafe returned a missing or malformed Choice answer",
-            transaction,
-            fingerprints.get(transaction.id),
-            historyByTransactionId.get(transaction.id),
-          ));
+        const validation = validateChoiceAnswer(response.answers[`t${String(index).padStart(2, "0")}`], validKeys);
+        if (validation.failure) {
+          outputRows.push({
+            ...failedRow(
+              transaction.id,
+              "TypeSafe returned a missing or malformed Choice answer",
+              transaction,
+              fingerprints.get(transaction.id),
+              historyByTransactionId.get(transaction.id),
+            ),
+            provider_validation: validation.failure,
+          });
           return;
         }
+        const answer = validation.answer;
         const history = historyByTransactionId.get(transaction.id) as HistorySummary;
         const selectedCategory = answer.choice === "leave_uncategorized"
           ? null
