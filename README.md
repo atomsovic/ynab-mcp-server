@@ -263,6 +263,15 @@ alternatives, and history summary. Applying a suggestion remains a separate,
 explicit human decision using `ynab_apply_category_suggestions` (or the general
 `ynab_update_transaction` tool).
 
+TypeSafe reports probabilities rounded to two decimal places. The preview accepts
+sum drift up to `0.000001 + option_count * 0.005`, including the leave option,
+while still requiring all requested options, finite values in [0, 1], valid
+confidence, and a maximum-probability choice. It never normalizes probabilities
+or confidence, and keeps the existing confidence thresholds. Model rows include
+`provider_distribution` with the raw sum, rounding precision, applied sum
+tolerance, and `normalized: false`. See the investigation below for the source
+contract and the limits of rounded distributions with many options.
+
 Malformed TypeSafe answers fail closed per row. Their `provider_validation`
 field identifies the rejected check using a fixed code, the expected option
 count, and (where applicable) the received option count or probability sum.

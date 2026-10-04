@@ -1,92 +1,135 @@
-# TypeSafe Choice validation investigation
+# TypeSafe rounded-probability compatibility
 
-2026-10-03; base `ea1c99c1bbd7722a170a6bb96dee3348b5015944`.
+## Conclusion and correction
 
-## Evidence and remaining uncertainty
+Our parser's 1e-6 sum check was incompatible with TypeSafe's rounded probability
+representation. A sum of 0.99 is not sufficient evidence of malformed provider
+output. The initial investigation relied too heavily on documentation shorthand
+saying probabilities sum to one; its conclusion that no correction was
+justified is superseded by the primary schema and rounding contract below.
 
-The reported three-row dry run used `jev-1.13.0`, 52 eligible categories,
-one provider call, and returned usage, but every row failed with the same
-missing-or-malformed Choice error. No raw provider response is available.
-The outer response passed validation; the individual answer validator rejected
-all three rows. This establishes the failure boundary, not the failed predicate.
+The corrected check matches Vercel AI SDK's TypeSafe provider contract:
 
-The official [HTTP API reference](https://docs.typesafe.ai/api),
-[Choice documentation](https://docs.typesafe.ai/primitives/choice), and
-[JavaScript response interface](https://docs.typesafe.ai/sdk/javascript/api/interfaces/ChoiceResponse)
-all specify `type: "choice"`, `choice`, `confidence`, and `probabilities`, with
-answers keyed by the requested question IDs. Probabilities cover every option,
-sum to one, and the choice is a maximum-probability option. The current parser
-matches that documented shape. The preliminary suspicion that `type` was an
-undocumented requirement was ruled out.
+```
+absolute(sum - 1) <= 0.000001 + option_count * 0.005
+```
 
-A synthetic three-row response with 52 categories plus `leave_uncategorized`
-passes the existing contract. Rounding of a large distribution is a possible
-cause, but there is no evidence yet that it caused the production failure.
-The existing 1e-6 sum/winner tolerance is unchanged. No fallback category,
-normalization, guessed missing option, relaxed type requirement, or retry was
-added. This patch does not claim to fix the live failure.
+TypeSafe probabilities are rounded to two decimal places. Each term can differ
+from its underlying value by half a final decimal unit. Count every requested
+option, including `leave_uncategorized`. With 3 options, the tolerance is
+0.015001; with 53, it is 0.265001. This is a worst-case representation bound,
+not a claim that any arbitrary response within that bound was rounded correctly.
+There is no normalization, probability inflation, or recomputed confidence.
 
-## Diagnostic change
+The strict 1e-6 highest-choice comparison is separate and unchanged. Required
+Choice type, confidence, exact option keys, finite numeric values and [0,1]
+bounds remain enforced. Missing/malformed responses, unknown options, sums
+outside the rounding bound, and nonmaximum choices fail closed. Native TypeSafe
+confidence/probabilities remain required despite cross-provider AI SDK schemas
+allowing their absence for other models.
 
-Failed Choice rows retain their existing error text and gain
-`provider_validation`. Only fixed codes and aggregate numbers are returned;
-provider strings, option labels, payload excerpts, headers, and credentials
-are never copied into this field. No additional console logging or persistence
-is introduced. Valid suggestions retain their existing response shape.
+Existing confidence thresholds (0.80 suggested, 0.50 needs_review) use raw
+provider confidence. Existing history conflicts still force review. Model rows
+now report `provider_distribution` containing the raw sum, `probability_decimals:
+2`, the applied `sum_tolerance`, and `normalized: false`. Winning probability and
+displayed alternatives retain their raw provider values. No sensitive payload,
+provider string, category label, header, or key is added to diagnostics.
 
-| Code | Rejected check |
-| --- | --- |
-| `missing_answer` | No answer at the requested question key |
-| `invalid_answer` | Answer is null, primitive, or array |
-| `invalid_answer_type` | Required `type: "choice"` is missing or different |
-| `invalid_choice` | Selected option is not a permitted string key |
-| `invalid_confidence` | Confidence is not a finite number in [0, 1] |
-| `invalid_probabilities` | Probabilities is not an object map |
-| `probability_keys_mismatch` | Options do not exactly match requested keys |
-| `invalid_probability_value` | A probability is not a finite number in [0, 1] |
-| `invalid_probability_sum` | Sum differs from one by more than 1e-6 |
-| `choice_not_maximum` | Choice is below the maximum by more than 1e-6 |
+## Primary evidence
 
-Every diagnostic includes `expected_option_count`, including the leave option.
-Checks after reading the probability map include `received_option_count`.
-An invalid sum additionally includes `probability_sum`, sufficient to distinguish
-small numeric drift from a materially incomplete distribution. Arrays are now
-explicitly rejected as invalid maps; documented valid responses are unchanged.
+- [TypeSafe OpenAPI](https://api.typesafe.ai/openapi.json) and the
+  [generated Python Choice schema](https://github.com/typesafe-ai/typesafe-sdk-python/blob/f078f1e208a0d885154dc758344ae4fce77ac168/src/typesafe_sdk/_schemas/models.py)
+  describe totals as approximate.
+- [Vercel's TypeSafe adapter](https://github.com/vercel/ai/blob/main/packages/typesafe-ai/src/typesafe-ai-evaluation-model.ts)
+  explicitly declares two-decimal probability rounding.
+- [AI SDK validation](https://github.com/vercel/ai/blob/main/packages/ai/src/evaluate/validate-evaluation.ts)
+  adds half a decimal unit per option to its 1e-6 tolerance, preserves native
+  values, and keeps maximum-choice checking separate.
+- [AI SDK evaluation documentation](https://ai-sdk.dev/docs/ai-sdk-core/evaluation#question-types)
+  explicitly explains that 0.99 can represent a valid rounded distribution.
+- TypeSafe's own
+  [JavaScript live integration test](https://github.com/typesafe-ai/typesafe-sdk-js/blob/66880ccded6cb642dc1809620c2b108c33730214/test/integration/api.integration.ts)
+  uses a broad approximate-sum check; its
+  [Python live integration test](https://github.com/typesafe-ai/typesafe-sdk-python/blob/f078f1e208a0d885154dc758344ae4fce77ac168/tests/test_integration.py)
+  likewise permits approximate totals. These corroborate approximation but are
+  not used as arbitrary fixed thresholds in this implementation.
 
-A next authorized live dry run with this patch would reveal the reason without
-sharing raw financial data. The user approved diagnostic deployment and a small live preview on
-2026-10-04; the parent session will perform that preview through the authorized
-connector. Alternatively, an existing response can be examined where it is
-already held and only its rejected check and aggregate counts shared. Do not
-request, log, or commit financial payloads or credentials for debugging.
+No live provider calls were made by this execution agent to gather this evidence.
+Public source retrieval does not require or use provider credentials.
+
+## End-to-end trace and observed evidence
+
+The request contains `state`, pinned `model: jev-1.13.0`, and keyed Choice
+questions with complete criteria. No output-token limit, probability precision,
+or numeric coercion parameter is set. The provider receives typed questions;
+there is no language-model-generated JSON parsing layer in this integration.
+
+`response.json()` decodes the provider envelope. Per-row validation reads the
+answer at the original question ID, checks the unmodified probability map,
+and sums every value. Category lookup and top-three display filtering happen
+only afterward. No option or value is removed before the sum check; no string
+conversion or rounding is performed locally. The SDKs also preserve probability
+values. The live failure therefore came from our representation assumption,
+not evidence of local filtering loss or a broken provider distribution.
+
+At deployed diagnostic SHA `51e0739d856dca42a4f6cb7d6d2a26233f154b33`, the
+parent's authorized three-row preview returned two parsed rows and one rejected
+sum: expected 53 options, received 53, sum 0.9900000000000002. This established
+which check rejected that row. The original vector was not retained here; it
+cannot establish every other check for that particular response. In particular,
+the winner check ran after the sum check and could still reject a different
+answer after this correction. The earlier all-three-failed preview did not
+include diagnostics, so its individual failure causes remain unknown.
+
+## Safeguards and limits
+
+This is a correction for valid rounded provider output, not a degraded-result
+bypass. No invalid-distribution candidate, review override, or change to the
+apply input contract is introduced. OAuth, read-only enforcement, freshness,
+eligibility, idempotency, audit preparation/outcome handling and undo safeguards
+are unchanged. Category application remains a separate explicit operation.
+
+The separate known near-tie issue where a chosen option is 0.01 below another
+option is still rejected. No automatic winner substitution is performed.
+
+Rounding can discard substantial aggregate information at large option counts.
+At 255 options the worst-case bound is 1.275001; a truly diffuse distribution
+can round every value to zero. A synthetic zero-confidence case remains
+`uncertain`, with zero raw values and no invented mass. This faithfully reflects
+the precision contract; it does not validate semantic correctness or calibration
+of a model answer. Do not interpret rounded values as exact probabilities.
 
 ## Verification
 
-Synthetic/mocked data only; no live YNAB or TypeSafe calls.
+Regression tests cover the observed 0.99 total with 53 complete options,
+positive and negative rounding drift, boundaries just inside/outside the
+three-option bound, 53-option bounds, and 255-option diffuse rounding. They
+also verify unchanged raw confidence thresholds and probabilities, complete
+keys/finite bounds, and rejection of wrong winners including the separate
+0.01 near-tie case. All fixtures and YNAB/TypeSafe responses are synthetic.
 
-- Regression red: targeted suite initially had 13 failures for absent diagnostics
-  and 30 passes, including the large documented response fixture.
-- `npm run test:run -- src/tests/SuggestCategoriesTool.test.ts`: 44 tests pass
-  after implementation and an additional missing-type case (independent review).
-- `YNAB_BROWSER_TESTS=true npm run test:run`: 510 tests pass in 40 files.
-- `npm run typecheck`: passes for Node and Worker.
-- `npm run build`: passes.
-- `node scripts/verify-category-audit-restart.mjs`: passes across two independent
-  Node processes.
-- Worker bundle: passes with synthetic bindings, an empty environment except
-  PATH/config/metrics settings, and `wrangler deploy --dry-run`; 1815.07 KiB,
-  gzip 295.40 KiB. This is not a deployment.
-- `git diff --check`: passes. No lint script is configured.
-- Independent review: no actionable regression or safety findings; confirmed
-  this is diagnostics, not a proven live fix.
+Initial red run: 12 regression failures, 53 passes against the strict parser.
+Subsequent tests refine the fixed-bound hypothesis to the source-backed
+count-based precision contract. Final command results are recorded below.
 
-Exact isolated bundle command, run from `/tmp` using the existing synthetic
-config (no production configuration or credentials):
+- `npm run test:run -- src/tests/SuggestCategoriesTool.test.ts`: 71 passed.
+- `YNAB_BROWSER_TESTS=true npm run test:run`: 537 passed in 40 files. First run
+  passed all assertions but failed Chromium profile teardown with `ENOTEMPTY`;
+  the complete rerun exited successfully without code changes.
+- `npm run typecheck`: Node and Worker passed.
+- `npm run build`: passed.
+- `node scripts/verify-category-audit-restart.mjs`: persisted audit verified
+  across two independent Node processes.
+- `git diff --check`: passed. No lint script is configured.
+- Isolated Worker bundle with synthetic bindings: 1815.66 KiB, gzip 295.56 KiB;
+  exact dry-run command below, with no production configuration or credentials.
+- Independent review: no actionable defects; independently verified 71 targeted
+  tests, typechecks, and diff whitespace checks.
 
 ```sh
 env -i PATH="$PATH" XDG_CONFIG_HOME=/tmp/ynab-discovery-bundle/config WRANGLER_SEND_METRICS=false node /workspace/ynab-mcp-server/node_modules/wrangler/bin/wrangler.js deploy --dry-run --config /tmp/ynab-discovery-bundle/wrangler.json --outdir /tmp/ynab-discovery-bundle/dist
 ```
 
-No authentication changes are part of this patch. On 2026-10-04 the user
-approved merging and deploying these diagnostics, followed by a small preview
-and a tested parser correction if the diagnostic evidence establishes one.
+The user approved deployment of a tested parser correction. A final authorized
+small native preview remains necessary to verify current live behavior; local
+synthetic tests cannot establish how a future provider answer will be classified.

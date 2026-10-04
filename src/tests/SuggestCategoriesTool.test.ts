@@ -588,6 +588,133 @@ describe("SuggestCategoriesTool", () => {
     expect(api.transactions).not.toHaveProperty("updateTransaction");
   });
 
+  it("accepts the provider approximate-sum contract for 53 options without changing raw values", async () => {
+    const categories = Array.from({ length: 52 }, (_, index) => category(`category-${index}`, `Category ${index}`));
+    const api = makeApi({
+      candidates: [transaction("valid-high"), transaction("approximate-sum"), transaction("valid-low")],
+      groups: [group("synthetic", "Synthetic", categories)],
+    });
+    const distribution = (winner: number, remainder: number) => ({
+      ...Object.fromEntries(Array.from({ length: 52 }, (_, index) =>
+        [`c${String(index).padStart(3, "0")}`, index === 0 ? winner : index === 1 ? remainder : 0])),
+      leave_uncategorized: 0,
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(choiceResponse({
+      t00: answer("c000", 0.94, distribution(0.95, 0.05)),
+      t01: answer("c000", 0.94, distribution(0.95, 0.04)),
+      t02: answer("c000", 0.41, { ...distribution(0.43, 0.3), leave_uncategorized: 0.27 }),
+    })));
+
+    const output = await result({}, api);
+
+    expect(output).toMatchObject({ dry_run: true, provider_calls: 1 });
+    expect(output.transactions[0]).toMatchObject({ status: "suggested", model_confidence: 0.94, winning_probability: 0.95 });
+    expect(output.transactions[1]).toMatchObject({
+      status: "suggested", model_confidence: 0.94, winning_probability: 0.95,
+      provider_distribution: { normalized: false, probability_decimals: 2 },
+    });
+    expect(output.transactions[1].provider_distribution.sum).toBeCloseTo(0.99, 12);
+    expect(output.transactions[1].top_alternatives[0].probability).toBe(0.04);
+    expect(output.transactions[2]).toMatchObject({ status: "uncertain", model_confidence: 0.41, winning_probability: 0.43 });
+    expect(api.transactions).not.toHaveProperty("updateTransaction");
+  });
+
+  it.each([
+    [0, true], [0.0000009, true], [-0.0000009, true],
+    [0.0000011, true], [-0.0000011, true],
+    [0.01, true], [-0.01, true], [0.0150009, true], [-0.0150009, true],
+    [0.0150011, false], [-0.0150011, false],
+    [0.05, false], [-0.05, false],
+    [0.1, false], [-0.1, false],
+  ])("uses the three-option rounding bound for deviation %s", async (deviation, accepted) => {
+    const api = makeApi();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(choiceResponse({
+      t00: answer("c000", 0.9, { c000: 0.8, c001: 0.1, leave_uncategorized: 0.1 + deviation }),
+    })));
+
+    const output = await result({}, api);
+
+    expect(output.transactions[0].status).toBe(accepted ? "suggested" : "failed");
+    if (accepted) {
+      expect(output.transactions[0]).toMatchObject({ model_confidence: 0.9, winning_probability: 0.8 });
+      expect(output.transactions[0]).not.toHaveProperty("provider_validation");
+    } else {
+      expect(output.transactions[0]).toMatchObject({
+        proposed_category: null,
+        provider_validation: { code: "invalid_probability_sum" },
+      });
+    }
+  });
+
+  it.each([
+    [0.799999, "needs_review"], [0.8, "suggested"],
+    [0.499999, "uncertain"], [0.5, "needs_review"],
+  ])("does not inflate confidence %s for an approximate distribution", async (confidence, status) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(choiceResponse({
+      t00: answer("c000", confidence, { c000: 0.8, c001: 0.1, leave_uncategorized: 0.09 }),
+    })));
+    const output = await result({}, makeApi());
+    expect(output.transactions[0]).toMatchObject({ status, model_confidence: confidence, winning_probability: 0.8 });
+    expect(output.transactions[0].provider_distribution).toMatchObject({ normalized: false, probability_decimals: 2 });
+  });
+
+  it("rejects a wrong winner even when the approximate sum is acceptable", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(choiceResponse({
+      t00: answer("c000", 0.9, { c000: 0.1, c001: 0.8, leave_uncategorized: 0.09 }),
+    })));
+    const output = await result({}, makeApi());
+    expect(output.transactions[0]).toMatchObject({ status: "failed", proposed_category: null,
+      provider_validation: { code: "choice_not_maximum" } });
+  });
+
+  it.each([[0.74, true], [0.73, false], [1.26, true], [1.27, false]])(
+    "uses all 53 rounded options to validate sum %s", async (sum, accepted) => {
+      const categories = Array.from({ length: 52 }, (_, index) => category(`category-${index}`, `Category ${index}`));
+      const api = makeApi({ groups: [group("synthetic", "Synthetic", categories)] });
+      const tail = sum < 1 ? 0.01 : 0.02;
+      const winner = Number((sum - 52 * tail).toFixed(2));
+      const probabilities = {
+        ...Object.fromEntries(Array.from({ length: 52 }, (_, index) =>
+          [`c${String(index).padStart(3, "0")}`, index === 0 ? winner : tail])),
+        leave_uncategorized: tail,
+      };
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(choiceResponse({ t00: answer("c000", 0.2, probabilities) })));
+      const output = await result({}, api);
+      expect(output.transactions[0].status).toBe(accepted ? "uncertain" : "failed");
+      if (accepted) {
+        expect(output.transactions[0].provider_distribution.sum).toBeCloseTo(sum, 12);
+        expect(output.transactions[0].provider_distribution.sum_tolerance).toBeCloseTo(0.265001, 12);
+        expect(output.transactions[0].winning_probability).toBe(winner);
+      } else {
+        expect(output.transactions[0]).toMatchObject({ proposed_category: null,
+          provider_validation: { code: "invalid_probability_sum" } });
+      }
+    },
+  );
+
+  it("keeps a fully rounded diffuse 255-option answer uncertain without inventing mass", async () => {
+    const categories = Array.from({ length: 254 }, (_, index) => category(`category-${index}`, `Category ${index}`));
+    const api = makeApi({ groups: [group("synthetic", "Synthetic", categories)] });
+    const probabilities = {
+      ...Object.fromEntries(Array.from({ length: 254 }, (_, index) => [`c${String(index).padStart(3, "0")}`, 0])),
+      leave_uncategorized: 0,
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(choiceResponse({ t00: answer("c000", 0, probabilities) })));
+    const output = await result({}, api);
+    expect(output.transactions[0]).toMatchObject({ status: "uncertain", model_confidence: 0, winning_probability: 0,
+      provider_distribution: { sum: 0, normalized: false, probability_decimals: 2 } });
+    expect(output.transactions[0].provider_distribution.sum_tolerance).toBeCloseTo(1.275001, 12);
+  });
+
+  it("keeps the separate 0.01 near-tie winner failure closed", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(choiceResponse({
+      t00: answer("c000", 0.5, { c000: 0.49, c001: 0.5, leave_uncategorized: 0 }),
+    })));
+    const output = await result({}, makeApi());
+    expect(output.transactions[0]).toMatchObject({ status: "failed", proposed_category: null,
+      provider_validation: { code: "choice_not_maximum" } });
+  });
+
   it.each([
     ["missing_answer", undefined],
     ["invalid_answer", null],
@@ -601,7 +728,7 @@ describe("SuggestCategoriesTool", () => {
     ["probability_keys_mismatch", answer("c000", 0.9, { c000: 1 })],
     ["probability_keys_mismatch", answer("c000", 0.9, { c000: 1, c001: 0, "private-provider-value": 0 })],
     ["invalid_probability_value", answer("c000", 0.9, { c000: 1.1, c001: -0.1, leave_uncategorized: 0 })],
-    ["invalid_probability_sum", answer("c000", 0.9, { c000: 0.9, c001: 0.05, leave_uncategorized: 0.04999 })],
+    ["invalid_probability_sum", answer("c000", 0.9, { c000: 0.9, c001: 0.05, leave_uncategorized: 0.0 })],
     ["choice_not_maximum", answer("c000", 0.9, { c000: 0.1, c001: 0.8, leave_uncategorized: 0.1 })],
   ])("reports safe %s diagnostics while failing closed", async (code, value) => {
     const api = makeApi();
@@ -616,7 +743,7 @@ describe("SuggestCategoriesTool", () => {
       provider_validation: { code, expected_option_count: 3 },
     });
     if (code === "invalid_probability_sum") {
-      expect(output.transactions[0].provider_validation.probability_sum).toBeCloseTo(0.99999, 10);
+      expect(output.transactions[0].provider_validation.probability_sum).toBeCloseTo(0.95, 10);
     }
     expect(JSON.stringify(output)).not.toContain("private-provider-value");
     expect(api.transactions).not.toHaveProperty("updateTransaction");

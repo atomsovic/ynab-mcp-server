@@ -29,6 +29,11 @@ export const DEFAULT_LIMIT = 20;
 export const MAX_LIMIT = 100;
 export const DEFAULT_BATCH_SIZE = 10;
 export const MAX_CHOICE_OPTIONS = 255;
+// TypeSafe's provider adapter declares two-decimal probability rounding.
+// Allow half a final decimal unit per option; never normalize provider values.
+export const TYPESAFE_PROBABILITY_DECIMALS = 2;
+const PROBABILITY_SUM_FLOAT_TOLERANCE = 1e-6;
+const CHOICE_WINNER_TOLERANCE = 1e-6;
 export const MAX_ESTIMATED_REQUEST_TOKENS = 60_000;
 export const MAX_ESTIMATED_STATE_AND_QUESTION_TOKENS = 30_000;
 export const MAX_PROJECTED_COST_PER_CALL_USD = 0.01;
@@ -561,7 +566,7 @@ interface ChoiceValidationFailure {
 }
 
 function validateChoiceAnswer(value: unknown, validKeys: Set<string>):
-  { answer: ChoiceAnswer; failure?: never } | { answer?: never; failure: ChoiceValidationFailure } {
+  { answer: ChoiceAnswer; probabilitySum: number; failure?: never } | { answer?: never; probabilitySum?: never; failure: ChoiceValidationFailure } {
   // Only allowlisted codes and aggregate numbers leave this boundary. Never return
   // provider fields, labels, or payload excerpts in diagnostics.
   const failure = (code: ChoiceValidationCode, details: { received_option_count?: number; probability_sum?: number } = {}) =>
@@ -585,16 +590,15 @@ function validateChoiceAnswer(value: unknown, validKeys: Set<string>):
     Number.isFinite(probability) && probability >= 0 && probability <= 1)) {
     return failure("invalid_probability_value", details);
   }
-  const tolerance = 1e-6;
   const totalProbability = entries.reduce((total, [, probability]) => total + probability, 0);
-  if (Math.abs(totalProbability - 1) > tolerance) {
+  if (Math.abs(totalProbability - 1) > PROBABILITY_SUM_FLOAT_TOLERANCE + entries.length * 0.5 * 10 ** -TYPESAFE_PROBABILITY_DECIMALS) {
     return failure("invalid_probability_sum", { ...details, probability_sum: totalProbability });
   }
   const highestProbability = Math.max(...entries.map(([, probability]) => probability));
-  if (answer.probabilities[answer.choice] < highestProbability - tolerance) {
+  if (answer.probabilities[answer.choice] < highestProbability - CHOICE_WINNER_TOLERANCE) {
     return failure("choice_not_maximum", details);
   }
-  return { answer: answer as ChoiceAnswer };
+  return { answer: answer as ChoiceAnswer, probabilitySum: totalProbability };
 }
 
 async function callTypeSafe(body: ReturnType<typeof buildTypeSafeRequest>, apiKey: string): Promise<TypeSafeResponse> {
@@ -986,6 +990,12 @@ export async function execute(input: SuggestCategoriesInput, api: ynab.API) {
           proposed_category: categoryOutput(selectedCategory),
           model_confidence: answer.confidence,
           winning_probability: answer.probabilities[answer.choice],
+          provider_distribution: {
+            sum: validation.probabilitySum,
+            normalized: false,
+            probability_decimals: TYPESAFE_PROBABILITY_DECIMALS,
+            sum_tolerance: PROBABILITY_SUM_FLOAT_TOLERANCE + validKeys.size * 0.5 * 10 ** -TYPESAFE_PROBABILITY_DECIMALS,
+          },
           top_alternatives: alternatives,
           history: historyForOutput(history, selectedCategory?.id ?? null),
         });
